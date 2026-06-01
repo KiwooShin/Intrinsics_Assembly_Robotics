@@ -59,13 +59,9 @@ def process_bag(bag_path: str, output_dir: str):
                 try:
                     msg = ts_store.deserialize_cdr(raw, conn.msgtype)
                     arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
-                    # Scale to 25% (288×256) matching RunACT
-                    
-                    # Simple block-average resize using numpy
-                    from functools import reduce
-                    h_scale, w_scale = 256/msg.height, 288/msg.width
-                    # Use numpy slicing for fast downscale
-                    scaled = arr[::4, ::4, :][:256, :288, :]
+                    # Scale to 25% (288×256) matching RunACT — proper bilinear resize
+                    import cv2
+                    scaled = cv2.resize(arr, (288, 256), interpolation=cv2.INTER_AREA)
                     images[cam].append((t, scaled))
                 except: pass
 

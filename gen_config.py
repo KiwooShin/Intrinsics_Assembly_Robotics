@@ -8,20 +8,38 @@ import yaml
 
 SRC = '/home/kiwoos/work/Intrinsics_Assembly_Robotics/aic_engine/config/eval_config.yaml'
 
-def perturb(base, i, seed=0):
+def perturb(base, i, seed=0, mode='near'):
     rng = random.Random(seed + i)
     U = rng.uniform
     c = copy.deepcopy(base)
     c['trials'] = {'trial_1': copy.deepcopy(base['trials']['trial_1'])}
     tb = c['trials']['trial_1']['scene']['task_board']
-    # --- GOAL: board pose (position + yaw) ---
-    tb['pose']['x'] += U(-0.015, 0.015)
-    tb['pose']['y'] += U(-0.015, 0.015)
-    tb['pose']['yaw'] += U(-0.08, 0.08)
-    # --- GOAL: target NIC card slide + yaw along its rail (rail_2 stays the target) ---
-    nic = tb['nic_rail_2']['entity_pose']
-    nic['translation'] = U(-0.0215, 0.0234)   # task_board_limits.nic_rail
-    nic['yaw'] = U(-0.04, 0.04)
+    task = c['trials']['trial_1']['tasks']['task_1']
+    if mode == 'near':
+        # --- GOAL: board pose (position + yaw), tight around eval trial_1 ---
+        tb['pose']['x'] += U(-0.015, 0.015)
+        tb['pose']['y'] += U(-0.015, 0.015)
+        tb['pose']['yaw'] += U(-0.08, 0.08)
+        # target stays nic_rail_2 / sfp_port_0
+        nic = tb['nic_rail_2']['entity_pose']
+        nic['translation'] = U(-0.0215, 0.0234)
+        nic['yaw'] = U(-0.04, 0.04)
+    else:  # wide: full SFP eval distribution
+        tb['pose']['x'] = 0.16 + U(-0.03, 0.04)        # eval x ~0.15-0.20
+        tb['pose']['y'] = -0.21 + U(-0.02, 0.26)       # eval y ~-0.22..0.05
+        tb['pose']['yaw'] = 3.1 + U(-0.2, 0.2)         # board faces robot (~pi)
+        rail = rng.choice([0, 1, 2, 3, 4])             # random target NIC rail
+        for k in range(5):
+            r = tb[f'nic_rail_{k}']
+            if k == rail:
+                r['entity_present'] = True
+                r['entity_name'] = f'nic_card_{k}'
+                r['entity_pose'] = {'translation': U(-0.0215, 0.0234),
+                                    'roll': 0.0, 'pitch': 0.0, 'yaw': U(-0.04, 0.04)}
+            else:
+                tb[f'nic_rail_{k}'] = {'entity_present': False}
+        task['port_name'] = rng.choice(['sfp_port_0', 'sfp_port_1'])
+        task['target_module_name'] = f'nic_card_mount_{rail}'
     # --- END: grasp offset (~2mm / ~0.04rad real grasp deviation) ---
     g = c['trials']['trial_1']['scene']['cables']['cable_0']['pose']
     g['gripper_offset']['x'] += U(-0.002, 0.002)
@@ -38,19 +56,21 @@ def main():
     ap.add_argument('-n', type=int, default=5)
     ap.add_argument('-o', default=os.path.expanduser('~/data/configs'))
     ap.add_argument('--seed', type=int, default=20260618)
+    ap.add_argument('--mode', choices=['near', 'wide'], default='near')
+    ap.add_argument('--prefix', default='cfg')
     a = ap.parse_args()
     os.makedirs(a.o, exist_ok=True)
     base = yaml.safe_load(open(SRC))
-    print(f"{'cfg':5} {'board x':>8} {'board y':>8} {'yaw':>7} {'nic_t':>7} {'nic_yaw':>8} {'grip_z':>8}")
+    print(f"mode={a.mode}  {'cfg':5} {'bx':>7} {'by':>7} {'yaw':>6} {'rail':>5} {'port':>11}")
     for i in range(a.n):
-        c = perturb(base, i, a.seed)
-        p = f'{a.o}/cfg_{i}.yaml'
+        c = perturb(base, i, a.seed, a.mode)
+        p = f'{a.o}/{a.prefix}_{i}.yaml'
         yaml.safe_dump(c, open(p, 'w'), sort_keys=False)
         tb = c['trials']['trial_1']['scene']['task_board']
-        g = c['trials']['trial_1']['scene']['cables']['cable_0']['pose']['gripper_offset']
-        print(f"{i:<5} {tb['pose']['x']:8.4f} {tb['pose']['y']:8.4f} {tb['pose']['yaw']:7.3f} "
-              f"{tb['nic_rail_2']['entity_pose']['translation']:7.4f} "
-              f"{tb['nic_rail_2']['entity_pose']['yaw']:8.4f} {g['z']:8.4f}  -> {p}")
+        task = c['trials']['trial_1']['tasks']['task_1']
+        rail = next((k for k in range(5) if tb[f'nic_rail_{k}'].get('entity_present')), '?')
+        print(f"      {i:<5} {tb['pose']['x']:7.3f} {tb['pose']['y']:7.3f} {tb['pose']['yaw']:6.2f} "
+              f"{str(rail):>5} {task['port_name']:>11}  -> {p}")
 
 if __name__ == '__main__':
     main()

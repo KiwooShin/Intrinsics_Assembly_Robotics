@@ -43,9 +43,21 @@ Collected **11 wide** demos (full SFP eval distribution: all rails, both ports, 
 
 Final model trained on all 16 episodes → `~/training/ckpt/v2_wide.pt` (for in-sim deployment via `DeployACT`).
 
-## Next
-- Test `DeployACT` in-sim (validate the submission/eval path), then build the **failure-driven loop**: run the learned policy across configs, score with the engine, generate CheatCode demos where it fails, retrain.
-- Recommend moving to **LeRobot ACT** for the competitive model (better chunk/multimodal generalization), reusing this data pipeline.
+## ⚠️ Deployment-runtime blocker (needs a decision)
+`DeployACT.py` is written and already importable (symlink-install), but **the policy cannot run in-sim yet** because of a Python/torch mismatch in this from-source setup:
+- `aic_model` runs under **`/usr/bin/python3` (3.12)** = the from-source ROS Kilted runtime → has `rclpy`, **no `torch`**.
+- The torch I trained with is **miniconda `python3` (3.13)** → has `torch`, but its `rclpy` is ABI-incompatible (built for 3.12).
+- `pixi.toml` is the *intended* runtime (co-installs ROS + lerobot + torch), but **no pixi env is built**, and pixi would use binary ROS, not the tuned from-source Gazebo.
+
+This also blocks the shipped `RunACT`. Options (user to choose — all touch the environment, so deferred):
+1. **`pip install --user torch` (cu128 aarch64) into `/usr/bin/python3`** — smallest change, keeps the tuned from-source sim. Risk: could shadow system numpy/deps used by from-source ROS. *(recommended, with care)*
+2. **`pixi install`** then run sim+policy via `pixi run` — repo-intended, isolated, but uses binary ROS (re-validate Gazebo rendering/perf).
+3. **Inference sidecar**: keep `aic_model` on /usr/bin/python3; run torch inference in a miniconda process; bridge over a ROS topic/service. More code, no env risk.
+
+## Next (once runtime resolved)
+- Test `DeployACT` in-sim, then build the **failure-driven loop**: run the learned policy across configs, score with the engine, generate CheatCode demos where it fails, retrain.
+- Move to **LeRobot ACT** for the competitive model (CVAE latent + temporal ensemble → better chunk/multimodal generalization), reusing this data pipeline. Note: LeRobot ACT also needs torch in the runtime (same blocker), and its `RunACT` uses a **26-D state** (pose+vel+err+joints) vs my pose-7 — align state when switching.
+- Continue step-wise data expansion (next: ~40 demos) and re-measure the val curve.
 
 ## Strategy: generating additional data + training (Phase 4 design)
 1. **Coverage-first, step-wise.** Diversity matters more than count with few demos. Expand 5 → ~15 → ~40, sampling the full eval distribution; measure the val curve at each step and stop when it plateaus / hits target.

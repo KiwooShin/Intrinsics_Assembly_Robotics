@@ -11,6 +11,32 @@ This repository contains the official toolkit to help participants start develop
 
 ---
 
+## 🚧 Participant Solution (this fork)
+
+> This fork adds an **imitation-learning pipeline** on top of the official toolkit. It distills the provided `CheatCode` oracle policy (which reads ground-truth port poses) into a **camera-only ACT policy** for the SFP/SC cable-insertion task. Full plan and rationale: [Plan.md](./Plan.md).
+
+**Why ACT (not point-cloud DP3):** the sim bridges **RGB only** (no depth topics), so the policy is image-based: 3 cameras + TCP state → action chunk of TCP velocities.
+
+**Pipeline:**
+
+```
+gen_config.py        # randomized scene configs near the eval distribution
+   └─ collect_one.sh / collect_set.sh   # run CheatCode (ground truth) → record bag (correct scoring detection)
+        └─ prepare_dataset.py            # bag → .npy, sync 3 cams + state, TRIM to the task window
+             └─ train_smoke.py           # ACT-style policy (CNN encoders + action chunking) on GPU
+   verify_dataset.py / make_video.py     # dataset sanity checks + insertion video
+```
+
+**Key gotchas captured here (so they aren't re-learned):**
+- CheatCode scores ~93/100 — detect success via the engine line `Trial '…' completed successfully! Score:`, **not** the strings the older scripts grepped for.
+- Episodes must be **trimmed** to `[first pose_command, last + 0.3s]` to drop pre-task idle and the post-task reset.
+- Raw bags are ~8 GB each; **delete after converting** to trimmed `.npy` episodes (~500 MB).
+- Gazebo rendering needs TigerVNC on display `:2`; effective camera rate is ~3.6 Hz.
+
+See [Plan.md → Progress Log](./Plan.md#progress-log--data--training-pipeline-2026-06-17--06-18) for current status and next steps.
+
+---
+
 ## Toolkit Guide
 
 Welcome to the AIC toolkit documentation. This guide walks you through the complete workflow for participating in the challenge — from understanding the requirements to submitting your solution.

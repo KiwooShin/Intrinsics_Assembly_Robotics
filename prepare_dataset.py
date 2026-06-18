@@ -34,6 +34,8 @@ def process_bag(bag_path: str, output_dir: str):
     controller_data = []  # (timestamp, tcp_pose 7D, tcp_velocity 6D, tcp_error 6D, joints 7D)
     images = {'left': [], 'center': [], 'right': []}  # (timestamp, H×W×3 array)
     wrench_data = []  # (timestamp, force 3D, torque 3D)
+    cmd_times = []        # timestamps of /aic_controller/pose_commands (model active ONLY during task)
+    insertion_times = []  # timestamps of /scoring/insertion_event (successful insertion)
 
     print(f"Reading {bag_path}...")
     with Reader(bag_path) as reader:
@@ -73,11 +75,34 @@ def process_bag(bag_path: str, output_dir: str):
                     wrench_data.append((t, [f.x, f.y, f.z, torq.x, torq.y, torq.z]))
                 except: pass
 
+            elif conn.topic == '/aic_controller/pose_commands':
+                cmd_times.append(t)          # only need the timing of model activity
+
+            elif conn.topic == '/scoring/insertion_event':
+                insertion_times.append(t)
+
     print(f"  controller: {len(controller_data)} | images per cam: {len(images['center'])} | wrench: {len(wrench_data)}")
+
+    # --- Trim to the task-execution window ---------------------------------
+    # The model publishes pose_commands ONLY while executing insert_cable, so
+    # [first_cmd, last_cmd] brackets the real demo and excludes the pre-task
+    # idle and the post-task reset/teleport back to home.
+    if cmd_times:
+        t_start = min(cmd_times)
+        t_end = max(cmd_times) + 0.3       # small margin to keep the final seated frame
+    else:
+        t_start, t_end = float('-inf'), float('inf')  # fallback: keep everything
+    span = (t_end - t_start) if cmd_times else 0.0
+    print(f"  pose_commands: {len(cmd_times)} | insertion_events: {len(insertion_times)} | "
+          f"task window: {span:.1f}s")
 
     # Synchronize: for each camera frame, find nearest controller state and wrench
     episodes = []
+    n_total = len(images['center'])
     for i, (t_img, img_c) in enumerate(images['center']):
+        # Trim: keep only frames inside the task-execution window
+        if not (t_start <= t_img <= t_end):
+            continue
         # Find nearest left and right frames
         if not images['left'] or not images['right']:
             continue
@@ -110,7 +135,7 @@ def process_bag(bag_path: str, output_dir: str):
             'tcp_error': err,        # 6D
         })
 
-    print(f"  Synchronized frames: {len(episodes)}")
+    print(f"  Synchronized frames: {len(episodes)} (kept from {n_total} total after trim)")
 
     # Save as numpy files
     if episodes:

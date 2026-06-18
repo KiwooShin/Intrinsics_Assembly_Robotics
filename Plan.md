@@ -69,6 +69,39 @@ ros2 run aic_model aic_model --ros-args -p use_sim_time:=true \
 
 ---
 
+## Progress Log — Data & Training Pipeline (2026-06-17 → 06-18)
+
+**Status:** imitation-learning data pipeline built and validated end-to-end on a single demo; tiny 5-sample overfit smoke test in progress.
+
+### Key corrections to the original plan
+- **ACT, not DP3.** The Gazebo sim bridges **RGB only** (`/{left,center,right}_camera/image` + `camera_info`); there are **no depth topics**, so point clouds (DP3) aren't available without enabling depth rendering. We use **ACT** (image-based action chunking), which matches the recorded data and the shipped `RunACT` example. DP3 deferred to a possible v2.
+- **CheatCode collection was never "failing."** CheatCode scores ~**93/100** on the SFP trial. The old collection scripts mis-detected success — they grepped for strings the engine never prints (`Complete Scoring Results`, `Cable insertion successful`, `total:`) and burned a 20-min timeout, then **deleted good demos**. Correct signal: `✓ Trial '…' completed successfully! Score: <x>` / `Finished scoring trial, total score is: <x>`.
+- **Episodes must be trimmed.** A raw recording brackets the real insertion with pre-task idle and a post-task reset/teleport-home. We trim each episode to the task window `[first /aic_controller/pose_commands, last + 0.3s]` (e.g. 780 → 531 clean frames ending at the seated plug).
+- **Storage:** raw bags are ~8 GB each (full-res 1152×1024); trimmed episodes ~500 MB. Delete bags after conversion. (~181 GB of stale data/bags removed.)
+- Effective camera rate is ~**3.6–3.7 Hz**, not the configured 20 Hz.
+
+### Pipeline scripts (this repo)
+| Script | Role |
+|---|---|
+| `gen_config.py` | Emit single-trial SFP configs with randomization **near eval values** (board pose, NIC card slide/yaw, grasp offset, robot home joints). |
+| `collect_one.sh <cfg> <tag>` / `collect_set.sh N` | Run CheatCode (ground truth) on a config, record bag, **correct** success/score detection. |
+| `prepare_dataset.py <bag> <out>` | Convert bag→`.npy`, sync 3 cams + state, **trim to task window**. |
+| `verify_dataset.py <ep>` | Sanity-check shapes/ranges/motion + montage PNG. |
+| `train_smoke.py` | Standalone PyTorch ACT-style policy (3-cam CNN + TCP pose → 16-step tcp_velocity chunk) on the GB10 GPU. |
+| `make_video.py` | Render side-by-side L/C/R insertion video from a bag. |
+
+### Verified so far
+- Single demo collected (score 93.2), converted, trimmed (531 frames), video rendered.
+- 5 near-eval randomized configs generated; collection of cfg_0…4 succeeding at ~93 each (in-distribution).
+
+### Next (autonomous): efficiency + step-wise scaling
+1. Overfit confirmation on the 5 samples (val == train), then **proper held-out validation**.
+2. Improve **dataloader/GPU utilization** (AMP, channels_last, pre-resized cached images, pin_memory, persistent workers, prefetch, larger batch).
+3. **Step-wise dataset expansion** (5 → ~15 → ~40) with progressively wider randomization (all NIC rails, both ports, wider board pose); delete raw bags after conversion.
+4. Prototype **on-the-fly / failure-driven data generation** (stream demos during training instead of storing everything; target configs where validation shows the policy failing).
+
+---
+
 ## Week 1 — Baselines, Data, First Model
 
 ### Day 1 — Establish Ground Truth (Today)

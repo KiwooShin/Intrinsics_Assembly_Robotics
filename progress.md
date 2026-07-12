@@ -5,6 +5,21 @@ Latest demo video: `demo/` (none yet — pipeline video pending first milestone)
 
 ---
 
+## 2026-07-12 ~15:30 — Recon done, execution running
+
+All 5 recon agents reported and were synthesized into ResearchPlan.md (11
+evidence→decision findings; headline: scale demos 16→150+ stratified, val-L1 is
+not the metric, F/T+dropout+shift-aug are cheap wins); 50 unittests + refactors
+landed on main (`df856df`). Four implementation agents are running: runtime-fix
+has VNC/Gazebo/eval-config up and is scoring `v2_wide.pt` in-sim, optimization
+agent is benchmarking at 96% GPU, A0 (wrench/joints + stratified configs with
+distractors) and B1 (matched-seed eval harness) are building. Liveness sweep
+15:31: no hung processes; GPU busy as intended.
+
+**Next 2 h:** first real engine score for `v2_wide.pt` (baseline table row),
+commit A0/B1/opt outputs as they land, start Phase-0 stratified demo collection
+on the freed sim, spawn the analysis sub-agent on the first result batch.
+
 ## 2026-07-12 ~13:00 — Session start
 
 Orchestration kicked off: 5 Opus recon sub-agents launched in parallel (Phase-1

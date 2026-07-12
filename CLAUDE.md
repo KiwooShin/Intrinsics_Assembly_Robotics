@@ -101,6 +101,13 @@ you touch it substantially.
   restart procedure in Plan.md is followed.
 - Record experiment outcomes (config, dataset size, val metrics, engine scores)
   in `SESSION_REPORT.md` as you go — that file is the running lab notebook.
+- **5-minute liveness watchdog:** the orchestrator checks overall status every
+  ~5 minutes: running processes (sim, training, collection), sub-agent activity
+  (output growth), and GPU/CPU utilization. A process/agent with no observable
+  progress (static logs/output AND no relevant CPU/GPU activity) across two
+  consecutive checks is considered HUNG: kill it and restart the task (for
+  sub-agents: stop + relaunch with a note about where it hung). Never wait
+  passively on a halting process.
 - **GPU watchdog:** this is a GPU-heavy project. Whenever a training/inference
   task is running, verify it is actually using the GPU (`nvidia-smi` util +
   process list, or `torch.cuda.is_available()` / device placement in code).

@@ -1,0 +1,10 @@
+{
+  "label": "train[max-autotune]",
+  "frames": 102400,
+  "steps": 400,
+  "throughput_fps": 6474.869124486405,
+  "ms_per_step": 39.53747868537903,
+  "gpu_util_mean": 96.0,
+  "gpu_util_max": 96.0,
+  "mem_activity_pct": 0.0
+}

@@ -5,6 +5,23 @@ Latest demo video: `demo/` (none yet — pipeline video pending first milestone)
 
 ---
 
+## 2026-07-12 ~16:30 — Deployment unblocked; arm-freeze root cause isolated
+
+The torch/rclpy blocker is FIXED (venv overlay, zero system pollution) and
+`v2_wide.pt` scored its first real trials — 73.36/300 on the official eval
+config — but diagnostically the arm barely moves (EE path ~0.00 m; mm/s
+velocity commands at 4 Hz die below the impedance controller's response,
+while the oracle trained in MODE_POSITION). Eval harness (53 pinned configs,
+121 tests green) and pipeline upgrade (wrench+joints, stratified strata mode
+with distractors) both landed on main; analysis agent flagged the sweep's K=8
+"win" as a proxy-metric artifact — adoption now gates on suite score.
+
+**Next 2 h:** UNFREEZE agent diagnoses aic_controller and converts the policy
+to position-mode chunk integration (time-boxed sim use), W1 agent screens
+shift-aug + proprio-dropout × K on GPU; then Phase-0 stratified collection
+takes the sim. Flag for user: 193 GB of stale May/June scoring bags in
+~/aic_results await a deletion decision (permission-gated).
+
 ## 2026-07-12 ~15:30 — Recon done, execution running
 
 All 5 recon agents reported and were synthesized into ResearchPlan.md (11

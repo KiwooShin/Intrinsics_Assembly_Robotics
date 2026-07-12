@@ -101,6 +101,12 @@ you touch it substantially.
   restart procedure in Plan.md is followed.
 - Record experiment outcomes (config, dataset size, val metrics, engine scores)
   in `SESSION_REPORT.md` as you go — that file is the running lab notebook.
+- **Canonical metric protocol** (2026-07-12 analysis): the PRIMARY metric is the
+  matched-seed in-sim eval-suite score (IQM + bootstrap CI); val first-action L1
+  is a secondary diagnostic only. Every leaderboard row must pin: train-episode
+  manifest (hash), config incl. chunk K, fixed epoch budget, seed set. Report
+  both K=8 and K=16 where relevant; prefer mean of 3 seeds for adoption
+  decisions.
 - **5-minute liveness watchdog:** the orchestrator checks overall status every
   ~5 minutes: running processes (sim, training, collection), sub-agent activity
   (output growth), and GPU/CPU utilization. A process/agent with no observable

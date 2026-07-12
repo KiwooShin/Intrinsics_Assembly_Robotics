@@ -18,6 +18,58 @@ from typing import Any
 
 import numpy as np
 
+# Canonical joint order used by the deployment adapter (aic_adapter ReorderJointState):
+# 6 UR5e arm joints followed by the gripper finger joint. Recording joint positions in
+# this order keeps the training dataset column-aligned with what a deployed policy sees.
+CANONICAL_JOINT_NAMES: tuple[str, ...] = (
+    "shoulder_pan_joint",
+    "shoulder_lift_joint",
+    "elbow_joint",
+    "wrist_1_joint",
+    "wrist_2_joint",
+    "wrist_3_joint",
+    "gripper/left_finger_joint",
+)
+
+
+def reorder_joint_positions(
+    names: list[str],
+    positions: list[float],
+    order: tuple[str, ...] = CANONICAL_JOINT_NAMES,
+) -> list[float] | None:
+    """Reorder raw ``/joint_states`` positions into the canonical model joint order.
+
+    Args:
+        names: Joint names as published on ``/joint_states`` (parallel to ``positions``).
+        positions: Joint positions parallel to ``names``.
+        order: Target joint-name order to project onto.
+
+    Returns:
+        A ``list[float]`` of length ``len(order)`` with each position placed in canonical
+        order, or ``None`` when ``names``/``positions`` are mismatched in length or do not
+        cover every name in ``order`` (the caller then falls back to raw publication order).
+    """
+    if not names or len(names) != len(positions):
+        return None
+    index = {name: i for i, name in enumerate(names)}
+    try:
+        return [float(positions[index[name]]) for name in order]
+    except KeyError:
+        return None
+
+
+def _nearest_value(stream: list[tuple[float, list[float]]], t: float) -> list[float]:
+    """Return the value of the ``(timestamp, value)`` tuple nearest ``t``.
+
+    Args:
+        stream: Non-empty list of ``(timestamp, value)`` tuples.
+        t: Query time in seconds.
+
+    Returns:
+        The ``value`` of the tuple whose timestamp is closest to ``t``.
+    """
+    return min(stream, key=lambda item: abs(item[0] - t))[1]
+
 
 @dataclasses.dataclass
 class EpisodeFrame:
@@ -31,6 +83,12 @@ class EpisodeFrame:
         tcp_pose: TCP pose as ``[x, y, z, qx, qy, qz, qw]`` (7 values).
         tcp_velocity: TCP velocity as ``[vx, vy, vz, wx, wy, wz]`` (the action label).
         tcp_error: TCP tracking error (6 values).
+        wrench: Force/torque as ``[fx, fy, fz, tx, ty, tz]`` (6 values) sampled from
+            ``/fts_broadcaster/wrench``. Defaults to zeros when no wrench stream is
+            available (backward compatibility with pre-wrench collection runs).
+        joint_pos: Arm+gripper joint positions in the canonical model order
+            (:data:`CANONICAL_JOINT_NAMES`, 7 values) sampled from ``/joint_states``.
+            Defaults to zeros when no joint stream is available.
     """
 
     timestamp: float
@@ -40,6 +98,8 @@ class EpisodeFrame:
     tcp_pose: list[float]
     tcp_velocity: list[float]
     tcp_error: list[float]
+    wrench: list[float] = dataclasses.field(default_factory=lambda: [0.0] * 6)
+    joint_pos: list[float] = dataclasses.field(default_factory=lambda: [0.0] * 7)
 
 
 def compute_task_window(
@@ -79,12 +139,17 @@ def synchronize_frames(
     t_start: float,
     t_end: float,
     max_dt: float = 0.5,
+    wrench: list[tuple[float, list[float]]] | None = None,
+    joints: list[tuple[float, list[float]]] | None = None,
 ) -> list[EpisodeFrame]:
     """Synchronise camera frames with the nearest controller state, within the window.
 
     For every center frame inside ``[t_start, t_end]`` the nearest (in time) left
     frame, right frame, and controller state are selected. Frames whose nearest
-    controller state is more than ``max_dt`` seconds away are dropped.
+    controller state is more than ``max_dt`` seconds away are dropped. The optional
+    ``wrench`` and ``joints`` streams are attached by nearest-message sync (the same
+    strategy as the controller state) but never cause a frame to be dropped, so adding
+    them does not change which frames are kept relative to the image/controller sync.
 
     Args:
         center: ``(timestamp, image)`` tuples for the center camera.
@@ -94,6 +159,12 @@ def synchronize_frames(
         t_start: Inclusive lower bound of the task window (seconds).
         t_end: Inclusive upper bound of the task window (seconds).
         max_dt: Maximum allowed |image - controller| time gap (seconds).
+        wrench: Optional ``(timestamp, [fx, fy, fz, tx, ty, tz])`` tuples from
+            ``/fts_broadcaster/wrench``. When ``None``/empty each frame's wrench is
+            zero-filled ``[0.0] * 6``.
+        joints: Optional ``(timestamp, joint_positions)`` tuples from ``/joint_states``
+            (already reordered to :data:`CANONICAL_JOINT_NAMES`). When ``None``/empty each
+            frame's joint position is zero-filled ``[0.0] * 7``.
 
     Returns:
         The list of synchronised :class:`EpisodeFrame` records, in center-frame order.
@@ -110,6 +181,8 @@ def synchronize_frames(
         t_ctrl, pose, vel, err = min(controller, key=lambda x: abs(x[0] - t_img))
         if abs(t_img - t_ctrl) > max_dt:
             continue
+        wr = _nearest_value(wrench, t_img) if wrench else [0.0] * 6
+        jp = _nearest_value(joints, t_img) if joints else [0.0] * 7
         frames.append(
             EpisodeFrame(
                 timestamp=t_img,
@@ -119,6 +192,8 @@ def synchronize_frames(
                 tcp_pose=pose,
                 tcp_velocity=vel,
                 tcp_error=err,
+                wrench=wr,
+                joint_pos=jp,
             )
         )
     return frames
@@ -126,6 +201,11 @@ def synchronize_frames(
 
 def save_episodes(frames: list[EpisodeFrame], output_dir: str) -> int:
     """Serialise synchronised frames to per-field ``.npy`` arrays.
+
+    Writes the core arrays (images, TCP pose/velocity, timestamps) plus the
+    proprioceptive ``wrenches`` ``(N, 6)`` and ``joint_positions`` ``(N, 7)`` arrays
+    (both ``float32``). The latter two are always written for new episodes; older
+    episodes lacking them are handled by the loader (see :func:`train_v2.load_all`).
 
     Args:
         frames: Synchronised episode frames to save.
@@ -143,6 +223,14 @@ def save_episodes(frames: list[EpisodeFrame], output_dir: str) -> int:
     np.save(f"{output_dir}/tcp_velocities.npy", np.array([f.tcp_velocity for f in frames]))
     np.save(f"{output_dir}/tcp_poses.npy", np.array([f.tcp_pose for f in frames]))
     np.save(f"{output_dir}/timestamps.npy", np.array([f.timestamp for f in frames]))
+    np.save(
+        f"{output_dir}/wrenches.npy",
+        np.array([f.wrench for f in frames], dtype=np.float32),
+    )
+    np.save(
+        f"{output_dir}/joint_positions.npy",
+        np.array([f.joint_pos for f in frames], dtype=np.float32),
+    )
     return len(frames)
 
 
@@ -194,6 +282,7 @@ def process_bag(bag_path: str, output_dir: str) -> int:
         "right": [],
     }
     wrench_data: list[tuple[float, list[float]]] = []
+    joint_data: list[tuple[float, list[float]]] = []
     cmd_times: list[float] = []
     insertion_times: list[float] = []
 
@@ -244,6 +333,18 @@ def process_bag(bag_path: str, output_dir: str) -> int:
                 except Exception:  # noqa: BLE001 - skip undecodable messages
                     pass
 
+            elif conn.topic == "/joint_states":
+                try:
+                    msg = ts_store.deserialize_cdr(raw, conn.msgtype)
+                    reordered = reorder_joint_positions(
+                        list(msg.name), list(msg.position)
+                    )
+                    if reordered is None:  # names did not match canonical set
+                        reordered = [float(x) for x in msg.position]  # raw order
+                    joint_data.append((t, reordered))
+                except Exception:  # noqa: BLE001 - skip undecodable messages
+                    pass
+
             elif conn.topic == "/aic_controller/pose_commands":
                 cmd_times.append(t)  # only need the timing of model activity
 
@@ -252,7 +353,8 @@ def process_bag(bag_path: str, output_dir: str) -> int:
 
     print(
         f"  controller: {len(controller_data)} | images per cam: "
-        f"{len(images['center'])} | wrench: {len(wrench_data)}"
+        f"{len(images['center'])} | wrench: {len(wrench_data)} | "
+        f"joints: {len(joint_data)}"
     )
 
     t_start, t_end = compute_task_window(cmd_times)
@@ -266,6 +368,7 @@ def process_bag(bag_path: str, output_dir: str) -> int:
     frames = synchronize_frames(
         images["center"], images["left"], images["right"],
         controller_data, t_start, t_end,
+        wrench=wrench_data, joints=joint_data,
     )
     print(f"  Synchronized frames: {len(frames)} (kept from {n_total} total after trim)")
 

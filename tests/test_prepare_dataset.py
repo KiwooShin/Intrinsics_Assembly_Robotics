@@ -42,6 +42,29 @@ class TestComputeTaskWindow(unittest.TestCase):
             pd.compute_task_window([1.0], margin=-0.1)
 
 
+class TestReorderJointPositions(unittest.TestCase):
+    def test_reorders_into_canonical_order(self) -> None:
+        # Deliberately shuffled publication order.
+        names = [
+            "elbow_joint", "shoulder_pan_joint", "gripper/left_finger_joint",
+            "wrist_2_joint", "shoulder_lift_joint", "wrist_3_joint", "wrist_1_joint",
+        ]
+        positions = [2.0, 0.0, 6.0, 4.0, 1.0, 5.0, 3.0]  # value == canonical index
+        out = pd.reorder_joint_positions(names, positions)
+        self.assertEqual(out, [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+
+    def test_missing_name_returns_none(self) -> None:
+        names = ["shoulder_pan_joint"]  # incomplete
+        self.assertIsNone(pd.reorder_joint_positions(names, [0.0]))
+
+    def test_length_mismatch_returns_none(self) -> None:
+        self.assertIsNone(
+            pd.reorder_joint_positions(["shoulder_pan_joint"], [0.0, 1.0]))
+
+    def test_empty_returns_none(self) -> None:
+        self.assertIsNone(pd.reorder_joint_positions([], []))
+
+
 class TestSynchronizeFrames(unittest.TestCase):
     def setUp(self) -> None:
         self.center = [(1.0, _img(10)), (2.0, _img(20)), (3.0, _img(30))]
@@ -52,6 +75,37 @@ class TestSynchronizeFrames(unittest.TestCase):
             (2.0, [1.0] * 7, [0.2] * 6, [0.0] * 6),
             (3.0, [2.0] * 7, [0.3] * 6, [0.0] * 6),
         ]
+        self.wrench = [
+            (0.95, [11.0] * 6), (2.05, [22.0] * 6), (3.02, [33.0] * 6),
+        ]
+        self.joints = [
+            (1.02, [0.1] * 7), (1.98, [0.2] * 7), (3.05, [0.3] * 7),
+        ]
+
+    def test_wrench_joints_default_zeros_when_absent(self) -> None:
+        frames = pd.synchronize_frames(
+            self.center, self.left, self.right, self.controller, 1.0, 1.0)
+        self.assertEqual(len(frames), 1)
+        self.assertEqual(frames[0].wrench, [0.0] * 6)
+        self.assertEqual(frames[0].joint_pos, [0.0] * 7)
+
+    def test_nearest_wrench_and_joints_selected(self) -> None:
+        frames = pd.synchronize_frames(
+            self.center, self.left, self.right, self.controller, 2.0, 2.0,
+            wrench=self.wrench, joints=self.joints)
+        self.assertEqual(len(frames), 1)
+        # nearest wrench to t=2.0 is (2.05, 22.0); nearest joints is (1.98, 0.2)
+        self.assertEqual(frames[0].wrench, [22.0] * 6)
+        self.assertEqual(frames[0].joint_pos, [0.2] * 7)
+
+    def test_wrench_never_drops_frames(self) -> None:
+        # A far-away single wrench sample must NOT reduce the kept-frame count.
+        far_wrench = [(1000.0, [9.0] * 6)]
+        frames = pd.synchronize_frames(
+            self.center, self.left, self.right, self.controller, 1.0, 3.0,
+            wrench=far_wrench)
+        self.assertEqual(len(frames), 3)
+        self.assertTrue(all(f.wrench == [9.0] * 6 for f in frames))
 
     def test_trims_outside_window(self) -> None:
         frames = pd.synchronize_frames(
@@ -101,6 +155,8 @@ class TestSaveEpisodes(unittest.TestCase):
                 tcp_pose=[float(i)] * 7,
                 tcp_velocity=[float(i) * 0.1] * 6,
                 tcp_error=[0.0] * 6,
+                wrench=[float(i) * 0.5] * 6,
+                joint_pos=[float(i) * 0.2] * 7,
             )
             for i in range(n)
         ]
@@ -114,20 +170,49 @@ class TestSaveEpisodes(unittest.TestCase):
             poses = np.load(p / "tcp_poses.npy")
             vels = np.load(p / "tcp_velocities.npy")
             ts = np.load(p / "timestamps.npy")
+            wrenches = np.load(p / "wrenches.npy")
+            joints = np.load(p / "joint_positions.npy")
             self.assertEqual(center.shape, (3, 4, 5, 3))
             self.assertEqual(center.dtype, np.uint8)
             self.assertEqual(poses.shape, (3, 7))
             self.assertEqual(vels.shape, (3, 6))
             self.assertEqual(ts.shape, (3,))
             self.assertEqual(poses.dtype.kind, "f")
+            # new proprioceptive fields: (N, 6) and (N, 7) float32
+            self.assertEqual(wrenches.shape, (3, 6))
+            self.assertEqual(wrenches.dtype, np.float32)
+            self.assertEqual(joints.shape, (3, 7))
+            self.assertEqual(joints.dtype, np.float32)
+            np.testing.assert_allclose(wrenches[2], [1.0] * 6)
+            np.testing.assert_allclose(joints[2], [0.4] * 7)
             # center images carry the +100 offset fill values
             self.assertEqual(int(center[2, 0, 0, 0]), 102)
+
+    def test_default_frame_writes_zero_proprioception(self) -> None:
+        # EpisodeFrame constructed without wrench/joint_pos zero-fills (backward compat).
+        frame = pd.EpisodeFrame(
+            timestamp=0.0,
+            left_image=_img(0, 4, 5),
+            center_image=_img(0, 4, 5),
+            right_image=_img(0, 4, 5),
+            tcp_pose=[0.0] * 7,
+            tcp_velocity=[0.0] * 6,
+            tcp_error=[0.0] * 6,
+        )
+        self.assertEqual(frame.wrench, [0.0] * 6)
+        self.assertEqual(frame.joint_pos, [0.0] * 7)
+        with tempfile.TemporaryDirectory() as d:
+            pd.save_episodes([frame], d)
+            self.assertEqual(np.load(Path(d) / "wrenches.npy").shape, (1, 6))
+            self.assertEqual(np.load(Path(d) / "joint_positions.npy").shape, (1, 7))
 
     def test_empty_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             n = pd.save_episodes([], d)
             self.assertEqual(n, 0)
             self.assertFalse((Path(d) / "center_images.npy").exists())
+            self.assertFalse((Path(d) / "wrenches.npy").exists())
+            self.assertFalse((Path(d) / "joint_positions.npy").exists())
 
 
 if __name__ == "__main__":

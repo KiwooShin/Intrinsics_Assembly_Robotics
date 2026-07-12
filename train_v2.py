@@ -34,6 +34,30 @@ class NormStats:
     astd: torch.Tensor
 
 
+@dataclasses.dataclass
+class ExtraObs:
+    """Optional per-frame proprioceptive observations loaded alongside the core tensors.
+
+    Populated only when :func:`load_all` is called with ``load_extra=True``. Episodes
+    collected before the wrench/joint upgrade lack ``wrenches.npy`` /
+    ``joint_positions.npy``; those frames are zero-filled and flagged ``False`` in the
+    corresponding availability mask so downstream code can mask them out.
+
+    Attributes:
+        wrench: Force/torque tensor shaped ``(N, wrench_dim)`` (``float32``).
+        joints: Joint-position tensor shaped ``(N, joint_dim)`` (``float32``).
+        has_wrench: Per-frame ``bool`` mask shaped ``(N,)``; ``False`` where the episode
+            lacked ``wrenches.npy`` (values are zero-filled).
+        has_joints: Per-frame ``bool`` mask shaped ``(N,)``; ``False`` where the episode
+            lacked ``joint_positions.npy`` (values are zero-filled).
+    """
+
+    wrench: torch.Tensor
+    joints: torch.Tensor
+    has_wrench: torch.Tensor
+    has_joints: torch.Tensor
+
+
 def build_action_chunks(actions: np.ndarray, k: int) -> np.ndarray:
     """Build per-frame action chunks, padding past the episode end with the last action.
 
@@ -102,9 +126,45 @@ def save_checkpoint(
     )
 
 
-def load_all(ep_dirs, img, K):
-    """Return GPU tensors: imgs (N,3,3,img,img) fp16, state (N,7), act (N,K,6), and ep id per frame."""
+def load_all(
+    ep_dirs: list[str],
+    img: int,
+    K: int,
+    load_extra: bool = False,
+    wrench_dim: int = 6,
+    joint_dim: int = 7,
+):
+    """Load episodes into GPU tensors, optionally with wrench/joint proprioception.
+
+    The core return is unchanged and default behaviour is identical to the original
+    loader, so existing training is unaffected. When ``load_extra`` is ``True`` an
+    :class:`ExtraObs` is appended; episodes that predate the wrench/joint upgrade (no
+    ``wrenches.npy`` / ``joint_positions.npy``) are zero-filled and flagged ``False`` in
+    the corresponding availability mask (backward compatibility).
+
+    Args:
+        ep_dirs: Episode directories, each holding the per-field ``.npy`` arrays.
+        img: Square input image size to resize every camera frame to.
+        K: Action chunk length passed to :func:`build_action_chunks`.
+        load_extra: When ``True`` also load wrench/joint arrays and return an
+            :class:`ExtraObs` as the final tuple element.
+        wrench_dim: Expected wrench width; used to zero-fill episodes lacking the file
+            and validated against present files.
+        joint_dim: Expected joint width; used to zero-fill episodes lacking the file and
+            validated against present files.
+
+    Returns:
+        ``(imgs, state, act, epid)`` where ``imgs`` is ``(N, 3, 3, img, img)`` fp16,
+        ``state`` is ``(N, 7)``, ``act`` is ``(N, K, 6)`` and ``epid`` is ``(N,)`` per-frame
+        episode ids. When ``load_extra`` is ``True`` an :class:`ExtraObs` is appended as a
+        fifth element.
+
+    Raises:
+        ValueError: If a present ``wrenches.npy`` / ``joint_positions.npy`` does not match
+            the expected ``(n, wrench_dim)`` / ``(n, joint_dim)`` shape.
+    """
     imgs, states, acts, epid = [], [], [], []
+    wrenches, joints, has_w, has_j = [], [], [], []
     for ei, d in enumerate(ep_dirs):
         c = np.load(f'{d}/center_images.npy'); l = np.load(f'{d}/left_images.npy'); r = np.load(f'{d}/right_images.npy')
         pose = np.load(f'{d}/tcp_poses.npy').astype(np.float32)
@@ -120,7 +180,52 @@ def load_all(ep_dirs, img, K):
         states.append(torch.from_numpy(pose).to(DEV))
         acts.append(torch.from_numpy(build_action_chunks(vel, K)).to(DEV))  # (n,K,6)
         epid.append(torch.full((n,), ei, device=DEV))
-    return (torch.cat(imgs), torch.cat(states), torch.cat(acts), torch.cat(epid))
+        if load_extra:
+            wrenches.append(_load_extra_field(f'{d}/wrenches.npy', n, wrench_dim, has_w))
+            joints.append(_load_extra_field(f'{d}/joint_positions.npy', n, joint_dim, has_j))
+    core = (torch.cat(imgs), torch.cat(states), torch.cat(acts), torch.cat(epid))
+    if not load_extra:
+        return core
+    extra = ExtraObs(
+        wrench=torch.cat(wrenches),
+        joints=torch.cat(joints),
+        has_wrench=torch.cat(
+            [torch.full((t.shape[0],), f, dtype=torch.bool, device=DEV)
+             for t, f in zip(wrenches, has_w)]
+        ),
+        has_joints=torch.cat(
+            [torch.full((t.shape[0],), f, dtype=torch.bool, device=DEV)
+             for t, f in zip(joints, has_j)]
+        ),
+    )
+    return (*core, extra)
+
+
+def _load_extra_field(path: str, n: int, dim: int, flags: list[bool]) -> torch.Tensor:
+    """Load an optional per-frame ``.npy`` field, zero-filling when absent.
+
+    Args:
+        path: Path to the ``.npy`` file (``wrenches.npy`` or ``joint_positions.npy``).
+        n: Frame count of the episode (used to size the zero-fill and validate shape).
+        dim: Expected feature width of the field.
+        flags: List that gets ``True`` appended when the file exists, ``False`` otherwise.
+
+    Returns:
+        A ``(n, dim)`` ``float32`` tensor on :data:`DEV`.
+
+    Raises:
+        ValueError: If the present file's shape is not ``(n, dim)``.
+    """
+    if os.path.exists(path):
+        arr = np.load(path).astype(np.float32)
+        if arr.shape != (n, dim):
+            raise ValueError(
+                f"{path}: expected shape {(n, dim)}, got {tuple(arr.shape)}"
+            )
+        flags.append(True)
+        return torch.from_numpy(arr).to(DEV)
+    flags.append(False)
+    return torch.zeros((n, dim), dtype=torch.float32, device=DEV)
 
 class Encoder(nn.Module):
     def __init__(self, out=128):

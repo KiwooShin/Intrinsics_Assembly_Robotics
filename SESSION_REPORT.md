@@ -69,3 +69,41 @@ This also blocks the shipped `RunACT`. Options (user to choose — all touch the
 - Stay with the standalone ACT-lite trainer, or invest in full LeRobot ACT (CVAE latent + temporal ensemble) for better multimodal/far-future prediction?
 - Target dataset size / compute budget for the first generalizing model.
 - Priority: breadth (cover SFP+SC, clutter) vs depth (nail SFP trials 1–2 first).
+
+## Analysis — proof sweep + benchmarks (2026-07-12, analysis sub-agent)
+
+**Headline:** the ASHA sweep's −15.6% "win" (val first-action 0.00316 vs 0.00374)
+is on the first-action L1 proxy that our own Finding #1 says does NOT predict
+success — treat it as hyperparameter narrowing, not a validated policy gain. It
+must be confirmed on the in-sim scored suite before adoption.
+
+- **K=8 > K=16 is a selection-metric artifact for deployment.** The objective
+  scores only action[0]; a shorter chunk trivially wins near-term L1. ACT
+  (arXiv:2304.13705) shows rollout success peaks at a ~2 s horizon (k≈100 @ 50 Hz
+  = K≈8 @ 4 Hz), and BID (arXiv:2408.17355) + arXiv:2507.09061 show longer chunks
+  help open-loop stability. Decision hinges on execution mode: for action[0]-only
+  re-planning (h=1) K=8 is legitimate; for open-loop chunks, prefer K=16. Settle
+  by running BOTH Ks through the matched-seed suite (h=1 and h=K), ranked by task
+  score, not L1.
+- **All EMA trials pruned at rung 0 = decay/budget mismatch, not bad luck.** EMA
+  decay 0.999 (≈1000-step horizon) with no warmup, seeded from random init, over
+  ~100 steps at rung 0 retains 0.999^100 ≈ 90% of the initialization — hence
+  val_L1 ≈ 0.68 (random level). Remove ema=0.999 from the broad search; re-add
+  only at final full-budget training with warmup/bias-correction or a step-matched
+  decay ~0.99 (EMA dynamics: arXiv:2411.18704).
+- **lr 1e-3 > 3e-4 is the un-applied linear-scaling correction** (bs64→bs256 in
+  Phase 2 never re-tuned lr; Goyal et al. arXiv:1706.02677 predicts ~1.2e-3). But
+  no 3e-4 config survived to 54 epochs, so ASHA's known fast-early-learner bias
+  (arXiv:1810.05934, 1603.06560) may have culled a competitive slow starter —
+  confirm with a full-budget, no-early-stop head-to-head including 3e-4.
+- **eager-bf16 (0.271 ms) slower than eager-fp32 (0.213 ms) at bs1/0.75M is
+  expected** (overhead-bound; autocast casts cost more than unrealized Tensor-Core
+  savings). Ship compiled-bf16 (0.112 ms) for inference; never eager-bf16.
+  torch.compile gives +16–22% train throughput. Inference has ~900× headroom
+  under 4 Hz — cheap enough for temporal ensembling / receding-horizon h=1.
+- **Cross-session comparability warning:** today's 0.00316 (8 WIDE-only eps, K8,
+  lr1e-3, 54 ep) is NOT comparable to June's 0.00296 (13 NEAR+WIDE eps, K16,
+  lr3e-4, 60 ep) — different train set, K, lr, budget. Going forward, track ONE
+  canonical metric: in-sim suite score (primary; rliable IQM+CI, arXiv:2108.13264),
+  pinned train-manifest hash, fixed budget, both K's, mean of 3 seeds; val-L1 is a
+  secondary diagnostic only.

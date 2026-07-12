@@ -24,13 +24,16 @@ if HAS_TORCH:
 
 
 def _write_episode(d: Path, n: int, h: int = 8, w: int = 10,
-                   vel_start: float = 0.0) -> None:
+                   vel_start: float = 0.0, extra: bool = False) -> None:
     rng = np.random.default_rng(int(vel_start) + 1)
     for name in ("center_images", "left_images", "right_images"):
         np.save(d / f"{name}.npy", rng.integers(0, 256, (n, h, w, 3), dtype=np.uint8))
     np.save(d / "tcp_poses.npy", rng.standard_normal((n, 7)).astype(np.float32))
     vel = (np.arange(n * 6).reshape(n, 6).astype(np.float32) + vel_start)
     np.save(d / "tcp_velocities.npy", vel)
+    if extra:  # new-format episode with wrench + joint proprioception
+        np.save(d / "wrenches.npy", rng.standard_normal((n, 6)).astype(np.float32))
+        np.save(d / "joint_positions.npy", rng.standard_normal((n, 7)).astype(np.float32))
 
 
 @unittest.skipUnless(HAS_TORCH, "torch not available")
@@ -116,6 +119,61 @@ class TestLoadAll(unittest.TestCase):
             vel = np.load(d0 / "tcp_velocities.npy")
             expected = train_v2.build_action_chunks(vel, 3)
             np.testing.assert_allclose(act.numpy(), expected)
+
+    def test_default_returns_four_tuple_unchanged(self) -> None:
+        # load_extra defaults off: existing 4-tuple return must be preserved.
+        with tempfile.TemporaryDirectory() as tmp:
+            d0 = Path(tmp) / "ep_0"; d0.mkdir()
+            _write_episode(d0, 3, extra=True)  # even with files present, default ignores
+            out = train_v2.load_all([str(d0)], 16, 4)
+            self.assertEqual(len(out), 4)
+
+
+@unittest.skipUnless(HAS_TORCH, "torch not available")
+class TestLoadAllExtra(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        train_v2.DEV = "cpu"
+
+    def test_loads_wrench_and_joints_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            d0 = Path(tmp) / "ep_0"; d0.mkdir()
+            _write_episode(d0, 3, extra=True)
+            out = train_v2.load_all([str(d0)], 16, 4, load_extra=True)
+            self.assertEqual(len(out), 5)
+            extra = out[4]
+            self.assertEqual(tuple(extra.wrench.shape), (3, 6))
+            self.assertEqual(tuple(extra.joints.shape), (3, 7))
+            self.assertEqual(extra.wrench.dtype, torch.float32)
+            self.assertTrue(bool(extra.has_wrench.all()))
+            self.assertTrue(bool(extra.has_joints.all()))
+            np.testing.assert_allclose(
+                extra.wrench.numpy(), np.load(d0 / "wrenches.npy"))
+
+    def test_old_episode_zero_fills_and_flags_false(self) -> None:
+        # Backward compat: an OLD episode (no wrench/joint files) loads as zeros + flag.
+        with tempfile.TemporaryDirectory() as tmp:
+            d0 = Path(tmp) / "ep_0"; d0.mkdir()  # new format
+            d1 = Path(tmp) / "ep_1"; d1.mkdir()  # old format
+            _write_episode(d0, 2, vel_start=0.0, extra=True)
+            _write_episode(d1, 3, vel_start=50.0, extra=False)
+            _, _, _, _, extra = train_v2.load_all(
+                [str(d0), str(d1)], 16, 4, load_extra=True)
+            self.assertEqual(tuple(extra.wrench.shape), (5, 6))
+            self.assertEqual(tuple(extra.joints.shape), (5, 7))
+            # first 2 frames (new episode) available, last 3 (old episode) zero-filled.
+            self.assertEqual(extra.has_wrench.tolist(), [True, True, False, False, False])
+            self.assertEqual(extra.has_joints.tolist(), [True, True, False, False, False])
+            self.assertTrue(bool((extra.wrench[2:] == 0).all()))
+            self.assertTrue(bool((extra.joints[2:] == 0).all()))
+
+    def test_bad_shape_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            d0 = Path(tmp) / "ep_0"; d0.mkdir()
+            _write_episode(d0, 3, extra=False)
+            np.save(d0 / "wrenches.npy", np.zeros((3, 5), np.float32))  # wrong width
+            with self.assertRaises(ValueError):
+                train_v2.load_all([str(d0)], 16, 4, load_extra=True)
 
 
 @unittest.skipUnless(HAS_TORCH, "torch not available")

@@ -1,0 +1,16 @@
+config_id,source,rail,plug,port,port_name,board_x,board_y,board_yaw,grasp_z,config_file
+cfg_000,stratified,0,SFP,0,sfp_port_0,0.156558,-0.110929,-1.488201,0.044484,configs/cfg_000.yaml
+cfg_001,stratified,0,SFP,1,sfp_port_1,0.164459,0.023119,0.836698,0.040403,configs/cfg_001.yaml
+cfg_002,stratified,0,SC,0,sc_port_0,0.153493,-0.187663,1.315782,0.045264,configs/cfg_002.yaml
+cfg_003,stratified,0,SC,1,sc_port_1,0.156012,-0.191408,0.632267,0.045936,configs/cfg_003.yaml
+cfg_004,stratified,1,SFP,0,sfp_port_0,0.164481,-0.180381,-1.450748,0.042524,configs/cfg_004.yaml
+cfg_005,stratified,1,SFP,1,sfp_port_1,0.167603,-0.162898,2.667286,0.041362,configs/cfg_005.yaml
+cfg_006,stratified,1,SC,0,sc_port_0,0.199434,-0.193975,-0.761633,0.042182,configs/cfg_006.yaml
+cfg_007,stratified,1,SC,1,sc_port_1,0.197785,-0.066344,2.837137,0.041010,configs/cfg_007.yaml
+cfg_008,stratified,2,SFP,0,sfp_port_0,0.157219,0.044067,-1.226413,0.041774,configs/cfg_008.yaml
+cfg_009,stratified,2,SFP,1,sfp_port_1,0.180618,0.042246,1.287700,0.044658,configs/cfg_009.yaml
+cfg_010,stratified,2,SC,0,sc_port_0,0.177384,-0.105782,-0.626948,0.040317,configs/cfg_010.yaml
+cfg_011,stratified,2,SC,1,sc_port_1,0.181067,-0.117315,0.906714,0.043255,configs/cfg_011.yaml
+official_1,official,2,SFP,0,sfp_port_0,0.160000,-0.210000,3.100000,0.042450,configs/official_1.yaml
+official_2,official,4,SFP,1,sfp_port_1,0.160000,0.050000,-3.100000,0.045450,configs/official_2.yaml
+official_3,official,1,SC,0,sc_port_0,0.200000,-0.150000,-1.800000,0.040450,configs/official_3.yaml

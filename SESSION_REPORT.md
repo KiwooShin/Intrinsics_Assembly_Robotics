@@ -70,6 +70,20 @@ This also blocks the shipped `RunACT`. Options (user to choose — all touch the
 - Target dataset size / compute budget for the first generalizing model.
 - Priority: breadth (cover SFP+SC, clutter) vs depth (nail SFP trials 1–2 first).
 
+## Experiment — arm unfreeze via position-mode deployment (2026-07-12 ~17:00)
+
+| Experiment | Verdict | Key metric |
+|---|---|---|
+| MODE_VELOCITY deadband hypothesis | ❌ Refuted | cmd 0.028 m/s moved the arm; clamp is 0.25 m/s, no deadband |
+| Root cause: open-loop reference drift | ✅ Confirmed | aic_controller.cpp:1060 — reference never re-anchored to measured TCP |
+| Receding-horizon MODE_POSITION fix | ✅ Success | eval_config total **36.1 → 119.4/300 (+230%)**; all trials directed approach |
+| Insertion | ❌ Not yet | stalls 5–6 cm short: near-port view ≈ seated end-state → ~0 velocity pred |
+
+Deployment recipe now: integrate first 4 predicted twists from measured TCP
+pose into absolute targets (~18 Hz sub-stepped), MODE_POSITION with CheatCode
+stiffness/damping; dt=0.275 s from episode timestamps. Next lever: DAgger
+demos at near-port stall states + more diverse data (Phase-0 campaign).
+
 ## Analysis — proof sweep + benchmarks (2026-07-12, analysis sub-agent)
 
 **Headline:** the ASHA sweep's −15.6% "win" (val first-action 0.00316 vs 0.00374)

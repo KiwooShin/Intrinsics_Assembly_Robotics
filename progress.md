@@ -5,6 +5,22 @@ Latest demo video: `demo/` (none yet — pipeline video pending first milestone)
 
 ---
 
+## 2026-07-12 ~17:00 — Arm unfrozen: 36 → 119/300 (+230%)
+
+Root cause was open-loop reference drift in the controller's velocity mode
+(not a deadband); DeployACT now does receding-horizon MODE_POSITION with
+per-inference re-anchoring to measured TCP, taking the official eval config
+from 36.1 to 119.4/300 with clean directed approaches to 5–6 cm of the port
+in all three trials. New bottleneck identified: last-inch stall (stationary-
+heavy training endings make near-port views predict ~zero velocity) — exactly
+the DAgger/data-lane target. W1 regularization matrix still training at 96%
+GPU.
+
+**Next 2 h:** Phase-0 stratified collection campaign starts on the freed sim
+(48 configs over 12 strata, storage-light, first-bag wrench validation +
+oracle demo video); W1 matrix completes and reports; first retrain planned at
++40 demos.
+
 ## 2026-07-12 ~16:30 — Deployment unblocked; arm-freeze root cause isolated
 
 The torch/rclpy blocker is FIXED (venv overlay, zero system pollution) and

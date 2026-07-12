@@ -66,6 +66,19 @@ you touch it substantially.
 - The orchestrator writes to `progress.md` **every 2 hours** during autonomous
   operation: a timestamped entry of **max 3 sentences** on what happened, plus
   a 1-2 line plan for the next 2 hours. Newest entry on top.
+- Research/experiment reports (progress.md entries at milestones, SESSION_REPORT.md,
+  plan documents) must state **which SOTA models were considered** (with checkpoint
+  ids where applicable) and **which research papers were referenced** (title +
+  arXiv id), so every technical decision is traceable to its sources.
+- Experiment results are reported as a **summary table**: one row per experiment,
+  with a title naming the experiment's main topic, a success/failure verdict,
+  and the key metric(s). Detailed prose follows the table, not the other way
+  around.
+- After each experiment batch, a dedicated **analysis sub-agent** reviews the
+  results against the research literature and past experiments (SESSION_REPORT.md
+  history) and reports: why the result occurred, whether it matches published
+  findings, and what to try next. Its analysis is appended to the experiment
+  record.
 - A **demo video** must stay available and current: after each significant
   policy/checkpoint milestone, render an insertion video (`make_video.py` or
   policy-rollout capture) into `demo/` and reference the latest one at the top
@@ -88,3 +101,11 @@ you touch it substantially.
   restart procedure in Plan.md is followed.
 - Record experiment outcomes (config, dataset size, val metrics, engine scores)
   in `SESSION_REPORT.md` as you go — that file is the running lab notebook.
+- **GPU watchdog:** this is a GPU-heavy project. Whenever a training/inference
+  task is running, verify it is actually using the GPU (`nvidia-smi` util +
+  process list, or `torch.cuda.is_available()` / device placement in code).
+  If a supposedly-GPU task is CPU-bound or the GPU sits idle unintentionally,
+  treat it as a bug: diagnose (wrong interpreter, missing CUDA build, tensor on
+  CPU, dataloader bottleneck) and fix before letting the task continue. The
+  orchestrator checks GPU utilization at every heartbeat; long-running agents
+  must self-check after launching any compute job.

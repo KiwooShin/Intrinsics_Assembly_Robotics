@@ -16,3 +16,20 @@ aic_utils/aic_mujoco/mjcf/*.png
 # Ignore aic_isaac usd assets
 aic_utils/aic_isaac/aic_isaaclab/source/aic_task/aic_task/tasks/manager_based/aic_task/Intrinsic_assets/
 
+
+# ML artifacts — never commit (CLAUDE.md §3)
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.npy
+*.npz
+*.zarr
+*.bag
+*.mcap
+*.db3
+*.mp4
+*.avi
+demo/
+data/
+ckpt/

@@ -1,19 +1,60 @@
 """Flexible train/val experiment: explicit disjoint train & val episode sets.
 Reuses model + loader from train_v2. Reports val L1 and first-action error (m/s).
-"""
-import sys, os, glob, time, argparse
-sys.path.insert(0, '/home/kiwoos/miniconda3/lib/python3.13/site-packages')
-import torch, torch.nn.functional as F
-import train_v2 as TV
-DEV = TV.DEV
 
-def expand(spec):
-    out = []
+The globbing / disjoint-split helpers are pure and importable without torch; the
+heavy imports (torch, train_v2) are performed lazily inside :func:`main` so the
+split logic can be unit tested on any interpreter.
+"""
+from __future__ import annotations
+
+import argparse
+import glob
+import os
+
+
+def expand(spec: str) -> list[str]:
+    """Expand a comma-separated list of globs into a flat, per-glob-sorted path list.
+
+    Args:
+        spec: Comma-separated glob patterns, e.g. ``"~/ds/ep_*, ~/ds/extra_*"``.
+
+    Returns:
+        The concatenation of ``sorted(glob.glob(part))`` for each comma-separated part.
+    """
+    out: list[str] = []
     for part in spec.split(','):
         out += sorted(glob.glob(part.strip()))
     return out
 
-def main():
+
+def split_train_val(train_spec: str, val_spec: str) -> tuple[list[str], list[str]]:
+    """Resolve train/val episode directories, excluding val episodes from train.
+
+    Args:
+        train_spec: Comma-separated globs for the training episodes.
+        val_spec: Comma-separated globs for the validation episodes; any path that
+            also matches ``train_spec`` is removed from the training set so the two
+            sets are disjoint.
+
+    Returns:
+        A ``(train_dirs, val_dirs)`` tuple. ``train_dirs`` contains no element of
+        ``val_dirs``.
+    """
+    val_dirs = expand(val_spec)
+    val_set = set(val_dirs)
+    train_dirs = [d for d in expand(train_spec) if d not in val_set]
+    return train_dirs, val_dirs
+
+
+def main() -> None:
+    """Parse CLI args, train on the disjoint split, and report val metrics."""
+    import torch
+    import torch.nn.functional as F
+
+    import train_v2 as TV
+
+    dev = TV.DEV
+
     ap = argparse.ArgumentParser()
     ap.add_argument('--train', required=True, help='comma-separated globs')
     ap.add_argument('--val', required=True, help='comma-separated globs (excluded from train)')
@@ -25,26 +66,25 @@ def main():
     ap.add_argument('--tag', default='exp')
     a = ap.parse_args()
 
-    val_dirs = expand(a.val)
-    train_dirs = [d for d in expand(a.train) if d not in set(val_dirs)]
+    train_dirs, val_dirs = split_train_val(a.train, a.val)
     print(f"[{a.tag}] train={len(train_dirs)} eps  val={len(val_dirs)} eps")
     print(f"    train: {[os.path.basename(d) for d in train_dirs]}")
     print(f"    val  : {[os.path.basename(d) for d in val_dirs]}")
 
     IMt, STt, ACt, _ = TV.load_all(train_dirs, a.img, a.k)
     IMv, STv, ACv, _ = TV.load_all(val_dirs, a.img, a.k)
-    smean, sstd = STt.mean(0), STt.std(0) + 1e-6
-    amean, astd = ACt.reshape(-1, 6).mean(0), ACt.reshape(-1, 6).std(0) + 1e-6
+    ns = TV.compute_norm_stats(STt, ACt)
+    smean, sstd, amean, astd = ns.smean, ns.sstd, ns.amean, ns.astd
     STt = (STt - smean) / sstd; STv = (STv - smean) / sstd
     ACt = (ACt - amean) / astd; ACv = (ACv - amean) / astd
 
-    m = TV.Policy(a.k).to(DEV)
+    m = TV.Policy(a.k).to(dev)
     opt = torch.optim.AdamW(m.parameters(), a.lr)
 
     def epoch(IM, ST, AC, train):
         m.train(train)
-        idx = torch.randperm(len(IM), device=DEV) if train else torch.arange(len(IM), device=DEV)
-        tot = torch.zeros((), device=DEV)
+        idx = torch.randperm(len(IM), device=dev) if train else torch.arange(len(IM), device=dev)
+        tot = torch.zeros((), device=dev)
         for i in range(0, len(idx), a.bs):
             b = idx[i:i + a.bs]
             with torch.autocast('cuda', dtype=torch.bfloat16):
@@ -71,6 +111,7 @@ def main():
             fs = val_firststep(); best = min(best, fs)
             print(f"  ep {ep:3d}  train={trl:.4f}  val={vl:.4f}  val_first|err|={fs:.5f} m/s")
     print(f"[{a.tag}] BEST val first-action |err| = {best:.5f} m/s  (action range ~0.05)\n")
+
 
 if __name__ == '__main__':
     main()

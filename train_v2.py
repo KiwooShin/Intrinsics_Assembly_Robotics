@@ -1,10 +1,106 @@
 """Efficient ACT-style trainer: entire (small) dataset on GPU, bf16 + channels_last + compile.
 Supports overfit (val==train) and proper held-out-episode validation.
 """
-import sys, os, glob, time, argparse
-sys.path.insert(0, '/home/kiwoos/miniconda3/lib/python3.13/site-packages')
-import numpy as np, torch, torch.nn as nn, torch.nn.functional as F
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import glob
+import os
+import time
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 DEV = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+
+@dataclasses.dataclass
+class NormStats:
+    """Per-dimension normalization statistics for state and action tensors.
+
+    Attributes:
+        smean: State mean, shaped ``(state_dim,)``.
+        sstd: State standard deviation (already ``+ eps``), shaped ``(state_dim,)``.
+        amean: Action mean, shaped ``(action_dim,)``.
+        astd: Action standard deviation (already ``+ eps``), shaped ``(action_dim,)``.
+    """
+
+    smean: torch.Tensor
+    sstd: torch.Tensor
+    amean: torch.Tensor
+    astd: torch.Tensor
+
+
+def build_action_chunks(actions: np.ndarray, k: int) -> np.ndarray:
+    """Build per-frame action chunks, padding past the episode end with the last action.
+
+    For an episode with ``n`` frames, frame ``t`` maps to the chunk
+    ``[actions[t], actions[t + 1], ..., actions[t + k - 1]]`` where indices beyond
+    ``n - 1`` are clamped to the last frame (ACT-style "repeat last action" padding).
+
+    Args:
+        actions: Action array shaped ``(n, action_dim)``.
+        k: Chunk length (number of future actions per frame). Must be >= 1.
+
+    Returns:
+        An array shaped ``(n, k, action_dim)``.
+
+    Raises:
+        ValueError: If ``k`` < 1.
+    """
+    if k < 1:
+        raise ValueError(f"chunk length k must be >= 1, got {k}")
+    n = len(actions)
+    idx = np.clip(np.arange(n)[:, None] + np.arange(k)[None, :], 0, n - 1)  # (n,k)
+    return actions[idx]
+
+
+def compute_norm_stats(
+    state: torch.Tensor, act: torch.Tensor, eps: float = 1e-6
+) -> NormStats:
+    """Compute mean/std normalization statistics over a set of frames.
+
+    Args:
+        state: State tensor shaped ``(M, state_dim)``.
+        act: Action tensor shaped ``(M, K, action_dim)``; flattened over the chunk
+            axis before computing statistics.
+        eps: Small constant added to every standard deviation to avoid divide-by-zero.
+
+    Returns:
+        A :class:`NormStats` with means and (eps-stabilised) standard deviations.
+    """
+    smean, sstd = state.mean(0), state.std(0) + eps
+    a = act.reshape(-1, act.shape[-1])
+    amean, astd = a.mean(0), a.std(0) + eps
+    return NormStats(smean=smean, sstd=sstd, amean=amean, astd=astd)
+
+
+def save_checkpoint(
+    path: str, model_state: dict, stats: NormStats, k: int, img: int
+) -> None:
+    """Save model weights and normalization stats to ``path`` (CPU tensors).
+
+    Args:
+        path: Destination ``.pt`` file (parent directories are created).
+        model_state: The model ``state_dict`` to save.
+        stats: Normalization statistics to embed for inference-time de-normalization.
+        k: Action chunk length used during training.
+        img: Square input image size used during training.
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(
+        {
+            'model': model_state,
+            'amean': stats.amean.cpu(), 'astd': stats.astd.cpu(),
+            'smean': stats.smean.cpu(), 'sstd': stats.sstd.cpu(),
+            'K': k, 'img': img,
+        },
+        path,
+    )
+
 
 def load_all(ep_dirs, img, K):
     """Return GPU tensors: imgs (N,3,3,img,img) fp16, state (N,7), act (N,K,6), and ep id per frame."""
@@ -22,8 +118,7 @@ def load_all(ep_dirs, img, K):
             cam.append(((t - 0.5) / 0.5).half())
         imgs.append(torch.stack(cam, 1))                      # (n,3,3,img,img)
         states.append(torch.from_numpy(pose).to(DEV))
-        idx = np.clip(np.arange(n)[:, None] + np.arange(K)[None, :], 0, n - 1)  # (n,K)
-        acts.append(torch.from_numpy(vel[idx]).to(DEV))       # (n,K,6)
+        acts.append(torch.from_numpy(build_action_chunks(vel, K)).to(DEV))  # (n,K,6)
         epid.append(torch.full((n,), ei, device=DEV))
     return (torch.cat(imgs), torch.cat(states), torch.cat(acts), torch.cat(epid))
 
@@ -71,8 +166,8 @@ def main():
     else:
         tr = torch.arange(N, device=DEV); va = tr      # overfit: val == train
     # normalize on train
-    smean, sstd = state[tr].mean(0), state[tr].std(0) + 1e-6
-    amean, astd = act[tr].reshape(-1, 6).mean(0), act[tr].reshape(-1, 6).std(0) + 1e-6
+    ns = compute_norm_stats(state[tr], act[tr])
+    smean, sstd, amean, astd = ns.smean, ns.sstd, ns.amean, ns.astd
     stn = (state - smean) / sstd
     actn = (act - amean) / astd
     print(f"frames={N} ({gb:.2f}GB on GPU) eps={nep} train={len(tr)} val={len(va)} "
@@ -112,10 +207,8 @@ def main():
             b = va[i:i + a.bs]; pred = m(imgs[b], stn[b]).float()
             err += ((pred[:, 0] - actn[b][:, 0]).abs() * astd).mean(1).sum().item()
     print(f"val mean |err| first action: {err/len(va):.5f} m/s  (range ~0.05)")
-    os.makedirs(os.path.dirname(a.out), exist_ok=True)
     sd = m._orig_mod.state_dict() if hasattr(m, '_orig_mod') else m.state_dict()
-    torch.save({'model': sd, 'amean': amean.cpu(), 'astd': astd.cpu(),
-                'smean': smean.cpu(), 'sstd': sstd.cpu(), 'K': a.k, 'img': a.img}, a.out)
+    save_checkpoint(a.out, sd, ns, a.k, a.img)
     print(f"saved {a.out}")
 
 if __name__ == '__main__':

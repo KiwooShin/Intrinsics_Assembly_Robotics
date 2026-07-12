@@ -2,13 +2,34 @@
 Keeps the proven trial_1 topology (nic_rail_2 / sfp_port_0) so CheatCode reliably
 succeeds; perturbs goal (board+card), grasp (end), and robot start (home joints).
 """
-import sys, os, copy, random, argparse
-sys.path.insert(0, '/home/kiwoos/miniconda3/lib/python3.13/site-packages')
+from __future__ import annotations
+
+import argparse
+import copy
+import os
+import random
+from typing import Any
+
 import yaml
 
 SRC = '/home/kiwoos/work/Intrinsics_Assembly_Robotics/aic_engine/config/eval_config.yaml'
 
-def perturb(base, i, seed=0, mode='near'):
+
+def perturb(base: dict[str, Any], i: int, seed: int = 0, mode: str = 'near') -> dict[str, Any]:
+    """Return a randomized copy of the base config near (or across) the eval values.
+
+    Args:
+        base: The parsed eval config to derive from (not mutated).
+        i: Trial index; combined with ``seed`` to seed the RNG deterministically.
+        seed: Base random seed. ``perturb`` with the same ``seed`` and ``i`` is
+            reproducible.
+        mode: ``'near'`` for tight perturbation around the proven trial_1 topology,
+            or ``'wide'`` for the full SFP eval distribution.
+
+    Returns:
+        A new config dict containing a single ``trial_1`` with perturbed goal, grasp,
+        and robot-start values.
+    """
     rng = random.Random(seed + i)
     U = rng.uniform
     c = copy.deepcopy(base)
@@ -51,7 +72,8 @@ def perturb(base, i, seed=0, mode='near'):
         c['robot']['home_joint_positions'][j] += U(-0.02, 0.02)
     return c
 
-def main():
+def main() -> None:
+    """Parse CLI args and write ``-n`` perturbed configs to the output directory."""
     ap = argparse.ArgumentParser()
     ap.add_argument('-n', type=int, default=5)
     ap.add_argument('-o', default=os.path.expanduser('~/data/configs'))

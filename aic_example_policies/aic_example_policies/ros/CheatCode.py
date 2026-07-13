@@ -17,6 +17,7 @@
 
 import numpy as np
 
+from aic_example_policies.ros.cheatcode_targeting import resolve_port_approach
 from aic_model.policy import (
     GetObservationCallback,
     MoveRobotCallback,
@@ -194,8 +195,22 @@ class CheatCode(Policy):
         self.get_logger().info(f"CheatCode.insert_cable() task: {task}")
         self._task = task
 
-        port_frame = f"task_board/{task.target_module_name}/{task.port_name}_link"
+        # Resolve the port frame + descent floor from the port type. SFP keeps the
+        # historical target (`..._link`, floor -0.015); SC retargets to the
+        # dedicated entrance frame with a shallower floor (see cheatcode_targeting).
+        # TODO(YAWFIX): the SC entrance frame + floor were derived statically from
+        # `SC Port/model.sdf`; the log line below prints what actually resolved so
+        # the post-campaign 15-min sim validation can confirm quickly.
+        approach = resolve_port_approach(
+            task.target_module_name, task.port_name, task.port_type
+        )
+        port_frame = approach.frame
+        descent_floor_z = approach.descent_floor_z
         cable_tip_frame = f"{task.cable_name}/{task.plug_name}_link"
+        self.get_logger().info(
+            f"CheatCode target: port_type={task.port_type!r} port_frame={port_frame} "
+            f"cable_tip_frame={cable_tip_frame} descent_floor_z={descent_floor_z}"
+        )
 
         # Wait for both the port and cable tip TFs to become available.
         # These come via ground_truth and may not be immediate.
@@ -235,9 +250,10 @@ class CheatCode(Policy):
                 self.get_logger().warn(f"TF lookup failed during interpolation: {ex}")
             self.sleep_for(0.05)
 
-        # Descend until the cable is inserted into the port.
+        # Descend until the cable is inserted into the port. The floor is
+        # per-port-type (SFP -0.015; SC shallower -- stop at the entrance frame).
         while True:
-            if z_offset < -0.015:
+            if z_offset < descent_floor_z:
                 break
 
             z_offset -= 0.0005

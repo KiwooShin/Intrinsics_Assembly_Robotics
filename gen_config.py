@@ -39,6 +39,16 @@ BOARD_X_MIN, BOARD_X_MAX = 0.15, 0.20    # board pose x (m)
 BOARD_Y_MIN, BOARD_Y_MAX = -0.21, 0.05   # board pose y (m)
 HOME_JITTER = 0.02                       # +/- home-joint jitter (rad)
 
+# --- Board-yaw eval band (strata mode) ---
+# Every official eval / sample-trial board yaw falls in one of two narrow clusters:
+# a near-+/-pi cluster (board faces the robot, |yaw| ~ 3.0-3.14, e.g. 3.1, -3.1,
+# 3.0, +/-pi) and a ~-1.8 side cluster (e.g. -1.8). Sampling U(-pi, pi) wasted
+# demos on yaw~0 boards that face away from the robot (out-of-distribution).
+# ``sample_eval_band_yaw`` reproduces the eval band instead.
+YAW_PI_BAND_MIN = 2.6                     # |yaw| lower bound of the +/-pi cluster (rad)
+YAW_SIDE_BAND_MIN, YAW_SIDE_BAND_MAX = -2.2, -1.4  # the ~-1.8 side cluster (rad)
+YAW_PI_BAND_PROB = 0.7                    # P(draw from the +/-pi cluster)
+
 NIC_RAILS: tuple[int, ...] = (0, 1, 2, 3, 4)
 SC_RAILS: tuple[int, ...] = (0, 1)
 SFP_PORTS: tuple[str, ...] = ('sfp_port_0', 'sfp_port_1')
@@ -211,6 +221,29 @@ def _encode_distractors(nic: list[int], sc: list[int]) -> str:
     return ';'.join(parts)
 
 
+def sample_eval_band_yaw(rng: random.Random) -> float:
+    """Sample a board yaw from the official eval-distribution band.
+
+    Reproduces the two narrow yaw clusters seen across the official eval / sample
+    trials instead of the full ``U(-pi, pi)`` circle (which wasted demos on yaw~0
+    boards facing away from the robot). With probability :data:`YAW_PI_BAND_PROB`
+    the yaw is drawn from the near-+/-pi cluster (``|yaw|`` uniform in
+    ``[YAW_PI_BAND_MIN, pi]`` with a random sign); otherwise it is drawn from the
+    ``~-1.8`` side cluster (``[YAW_SIDE_BAND_MIN, YAW_SIDE_BAND_MAX]``).
+
+    Args:
+        rng: Seeded RNG; all draws use it so callers stay reproducible.
+
+    Returns:
+        A board yaw in radians inside the eval band.
+    """
+    if rng.random() < YAW_PI_BAND_PROB:
+        magnitude = rng.uniform(YAW_PI_BAND_MIN, math.pi)
+        sign = 1.0 if rng.random() < 0.5 else -1.0
+        return sign * magnitude
+    return rng.uniform(YAW_SIDE_BAND_MIN, YAW_SIDE_BAND_MAX)
+
+
 def build_strata_config(
     base: dict[str, Any],
     stratum: Stratum,
@@ -260,7 +293,7 @@ def build_strata_config(
     # --- GOAL: board pose (continuous, full eval ranges) ---
     tb['pose']['x'] = rng.uniform(BOARD_X_MIN, BOARD_X_MAX)
     tb['pose']['y'] = rng.uniform(BOARD_Y_MIN, BOARD_Y_MAX)
-    tb['pose']['yaw'] = rng.uniform(-math.pi, math.pi)
+    tb['pose']['yaw'] = sample_eval_band_yaw(rng)
 
     if stratum.plug == 'sfp':
         # NIC rails: only the target present unless distractors add more.

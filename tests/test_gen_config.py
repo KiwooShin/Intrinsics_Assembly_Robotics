@@ -10,6 +10,7 @@ import copy
 import csv
 import dataclasses
 import math
+import random
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,6 +27,19 @@ EVAL_CONFIG = REPO_ROOT / "aic_engine" / "config" / "eval_config.yaml"
 NIC_MIN, NIC_MAX = -0.0215, 0.0234
 CARD_YAW_LIMIT = math.radians(10.0)  # +/- 10 degrees
 GRASP_Z_MIN, GRASP_Z_MAX = 0.040, 0.046
+
+
+def _yaw_in_eval_band(yaw: float) -> bool:
+    """Return True if ``yaw`` lies in either eval-band cluster.
+
+    The eval band is the near-+/-pi cluster (``|yaw|`` in
+    ``[YAW_PI_BAND_MIN, pi]``) or the ``~-1.8`` side cluster
+    (``[YAW_SIDE_BAND_MIN, YAW_SIDE_BAND_MAX]``); see ``gen_config``.
+    """
+    in_pi_band = gen_config.YAW_PI_BAND_MIN - 1e-9 <= abs(yaw) <= math.pi + 1e-9
+    in_side_band = (gen_config.YAW_SIDE_BAND_MIN - 1e-9
+                    <= yaw <= gen_config.YAW_SIDE_BAND_MAX + 1e-9)
+    return in_pi_band or in_side_band
 
 
 def _synthetic_base() -> dict[str, Any]:
@@ -269,8 +283,9 @@ class TestBuildStrataConfig(unittest.TestCase):
                 self.assertLessEqual(tb["pose"]["x"], 0.20 + 1e-9)
                 self.assertGreaterEqual(tb["pose"]["y"], -0.21 - 1e-9)
                 self.assertLessEqual(tb["pose"]["y"], 0.05 + 1e-9)
-                self.assertGreaterEqual(tb["pose"]["yaw"], -math.pi - 1e-9)
-                self.assertLessEqual(tb["pose"]["yaw"], math.pi + 1e-9)
+                self.assertTrue(
+                    _yaw_in_eval_band(tb["pose"]["yaw"]),
+                    msg=f"yaw {tb['pose']['yaw']} outside eval band (seed={seed} idx={idx})")
                 self.assertGreaterEqual(row.grasp_z, GRASP_Z_MIN - 1e-9)
                 self.assertLessEqual(row.grasp_z, GRASP_Z_MAX + 1e-9)
                 if c.plug == "sfp":
@@ -279,6 +294,44 @@ class TestBuildStrataConfig(unittest.TestCase):
                     lo, hi = gen_config.SC_MIN, gen_config.SC_MAX
                 self.assertGreaterEqual(row.target_translation, lo - 1e-9)
                 self.assertLessEqual(row.target_translation, hi + 1e-9)
+
+    def test_yaw_always_in_eval_band(self) -> None:
+        """Every strata board yaw stays inside the eval band (never yaw~0)."""
+        for seed in range(12):
+            for idx, c in enumerate(self.cells):
+                cfg, row = gen_config.build_strata_config(
+                    self.base, c, idx, seed=seed)
+                yaw = cfg["trials"]["trial_1"]["scene"]["task_board"]["pose"]["yaw"]
+                self.assertTrue(
+                    _yaw_in_eval_band(yaw),
+                    msg=f"yaw {yaw} outside eval band (seed={seed} idx={idx})")
+                self.assertEqual(row.board_yaw, yaw)
+
+    def test_yaw_both_subbands_reachable(self) -> None:
+        """Both the +/-pi cluster (both signs) and the ~-1.8 side band are sampled."""
+        saw_pi_pos = saw_pi_neg = saw_side = False
+        for seed in range(60):
+            for idx, c in enumerate(self.cells):
+                cfg, _ = gen_config.build_strata_config(self.base, c, idx, seed=seed)
+                yaw = cfg["trials"]["trial_1"]["scene"]["task_board"]["pose"]["yaw"]
+                if yaw >= gen_config.YAW_PI_BAND_MIN:
+                    saw_pi_pos = True
+                elif yaw <= -gen_config.YAW_PI_BAND_MIN:
+                    saw_pi_neg = True
+                elif (gen_config.YAW_SIDE_BAND_MIN <= yaw
+                      <= gen_config.YAW_SIDE_BAND_MAX):
+                    saw_side = True
+            if saw_pi_pos and saw_pi_neg and saw_side:
+                break
+        self.assertTrue(saw_pi_pos, "positive +/-pi cluster never sampled")
+        self.assertTrue(saw_pi_neg, "negative +/-pi cluster never sampled")
+        self.assertTrue(saw_side, "~-1.8 side band never sampled")
+
+    def test_sample_eval_band_yaw_unit(self) -> None:
+        """The standalone sampler only ever returns in-band yaws."""
+        rng = random.Random(0)
+        for _ in range(2000):
+            self.assertTrue(_yaw_in_eval_band(gen_config.sample_eval_band_yaw(rng)))
 
     def test_deterministic_under_seed(self) -> None:
         c = self.cells[0]

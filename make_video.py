@@ -54,13 +54,17 @@ def select_window(
     return [(t, a) for (t, a) in frames if t0 <= t <= t1]
 
 
-def render_video(bag: str, out: str, fps: int = FPS) -> int:
+DEFAULT_TITLE = "AIC SFP insertion  -  CheatCode (score 93.2)"
+
+
+def render_video(bag: str, out: str, fps: int = FPS, title: str = DEFAULT_TITLE) -> int:
     """Render the trimmed L/C/R insertion video from a bag to ``out``.
 
     Args:
         bag: Path to the rosbag2/MCAP directory.
         out: Output ``.mp4`` path.
         fps: Output frame rate.
+        title: Header text drawn on every frame.
 
     Returns:
         The number of frames written.
@@ -119,7 +123,7 @@ def render_video(bag: str, out: str, fps: int = FPS) -> int:
         row = np.hstack(tiles)
         canvas = np.zeros((H, W, 3), np.uint8)
         canvas[HEADER:] = row
-        cv2.putText(canvas, "AIC SFP insertion  -  CheatCode (score 93.2)", (10, 27),
+        cv2.putText(canvas, title, (10, 27),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         cv2.putText(canvas, f"t={t - t0:5.1f}s  {i + 1}/{n}", (W - 230, 27),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 220, 255), 2)
@@ -135,13 +139,14 @@ def render_video(bag: str, out: str, fps: int = FPS) -> int:
 
 
 def main() -> None:
-    """CLI entry point: render a video from ``argv[1]`` (bag) to ``argv[2]`` (out)."""
+    """CLI entry point: render ``argv[1]`` (bag) to ``argv[2]`` (out), ``argv[3]`` = title."""
     bag = (
         sys.argv[1] if len(sys.argv) > 1
         else os.path.expanduser("~/data/demos/one_20260617_233031")
     )
     out = sys.argv[2] if len(sys.argv) > 2 else '/home/kiwoos/work/insertion_demo.mp4'
-    render_video(bag, out)
+    title = sys.argv[3] if len(sys.argv) > 3 else DEFAULT_TITLE
+    render_video(bag, out, title=title)
 
 
 if __name__ == '__main__':

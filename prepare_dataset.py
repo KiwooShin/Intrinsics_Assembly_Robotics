@@ -283,6 +283,8 @@ def process_bag(bag_path: str, output_dir: str) -> int:
     }
     wrench_data: list[tuple[float, list[float]]] = []
     joint_data: list[tuple[float, list[float]]] = []
+    joint_matched = 0  # /joint_states messages reordered into canonical model order
+    joint_fallback = 0  # messages whose names did not match -> raw publication order
     cmd_times: list[float] = []
     insertion_times: list[float] = []
 
@@ -341,6 +343,9 @@ def process_bag(bag_path: str, output_dir: str) -> int:
                     )
                     if reordered is None:  # names did not match canonical set
                         reordered = [float(x) for x in msg.position]  # raw order
+                        joint_fallback += 1
+                    else:
+                        joint_matched += 1
                     joint_data.append((t, reordered))
                 except Exception:  # noqa: BLE001 - skip undecodable messages
                     pass
@@ -355,6 +360,10 @@ def process_bag(bag_path: str, output_dir: str) -> int:
         f"  controller: {len(controller_data)} | images per cam: "
         f"{len(images['center'])} | wrench: {len(wrench_data)} | "
         f"joints: {len(joint_data)}"
+    )
+    print(
+        f"  joint_name_match: matched_canonical={joint_matched} "
+        f"fallback_raw_order={joint_fallback}"
     )
 
     t_start, t_end = compute_task_window(cmd_times)

@@ -5,6 +5,28 @@ Latest demo video: `demo/` (none yet — pipeline video pending first milestone)
 
 ---
 
+## 2026-07-12 20:40 — ⏸ PAUSED by user (GPU needed for another project)
+
+Paused mid-campaign at **22/40 Phase-0 KEEPs** (plus 16 legacy episodes = 38
+total); all processes stopped cleanly (GPU 0%, sim down, partial bag of the
+interrupted demo deleted), all completed work committed and pushed through
+`898ad05`+. Best score on record: **119.4/300** (position-mode DeployACT,
+`v2_wide.pt`); demo video in `~/demo/`, live dashboard published.
+
+**TO RESUME (in order):**
+1. Collection: `cd ~/work/Intrinsics_Assembly_Robotics && PLUG=sfp nohup bash
+   collect_campaign.sh >> ~/training/ds_phase0/campaign.log 2>&1 &` — resumable,
+   skips the 22 converted episodes, ~18 demos ≈ 2 h remain.
+2. At CAMPAIGNDONE: retrain (opt/train_v3 + shift-aug per opt/results/w1_report.md
+   winner, both K∈{8,16}) on ds_phase0+ds_wide+smoke, AND run the 15-min
+   CheatCode SC validation (plan in YAWFIX agent report / SESSION_REPORT §SC-DIAG;
+   success = ≥85 & contacts 0 → then collect the 8 SC configs).
+3. Then: paired eval on eval_suite_smoke (15 cfgs) of v2_wide/v3_wide/w1_best_k8/
+   w1_best_k16/new ckpts via eval_suite.py; analysis agent; policy rollout video;
+   dashboard republish.
+Open user items: Phase-1 deadline conflict (Jul 14 vs Aug 4 — check portal);
+193 GB stale bags in ~/aic_results awaiting deletion approval.
+
 ## 2026-07-12 ~19:00 — Campaign grinding; SC root-caused; dashboard live
 
 Phase-0 collection is at 10/40 KEEPs (oracle 92.6–93.9, 100% keep-rate) after

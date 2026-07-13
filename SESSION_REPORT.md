@@ -84,6 +84,22 @@ pose into absolute targets (~18 Hz sub-stepped), MODE_POSITION with CheatCode
 stiffness/damping; dt=0.275 s from episode timestamps. Next lever: DAgger
 demos at near-port stall states + more diverse data (Phase-0 campaign).
 
+## Diagnosis — CheatCode SC failure (2026-07-12 ~18:00, SC-DIAG sub-agent)
+
+| Experiment | Verdict | Key evidence |
+|---|---|---|
+| CheatCode on generated SC config | ❌ Fail (19.07) | Gripper finger hit the TARGET sc_port_0 body (−24); plug stalled 2 cm out |
+| Distractor-contact hypothesis | ❌ Ruled out | Contact partner was the target port, not a distractor |
+| Root cause: no SC branch in CheatCode | ✅ Confirmed | Generic SFP-calibrated descent targets `{port}_link`; SC uses rotated frame + separate `_entrance` frame (offset −0.0156) CheatCode never uses |
+| gen_config strata yaw U(−π,π) | 🐛 Bug found | Eval yaws cluster in {±3.1, 3.0, −1.8}; yaw≈0 boards are OOD/unreachable |
+
+Fixes dispatched: eval-band yaw sampler + in-place config regen + campaign
+relaunch (resumable, episode names unchanged); CheatCode SC retarget to the
+entrance frame with shallower descent floor (sim validation post-campaign,
+success = ≥85 with contacts 0). If SC stays unsolved, ceiling ≈ 200/300
+(trial 3 forfeited) — SC oracle fix is the highest-value single item after
+data volume.
+
 ## Analysis — proof sweep + benchmarks (2026-07-12, analysis sub-agent)
 
 **Headline:** the ASHA sweep's −15.6% "win" (val first-action 0.00316 vs 0.00374)

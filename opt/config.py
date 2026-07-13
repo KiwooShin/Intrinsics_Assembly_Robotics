@@ -41,6 +41,11 @@ class TrainConfig:
         use_fp8: Attempt torchao float8 training (degrades to bf16 if absent).
         seed: RNG seed for deterministic runs.
         out: Checkpoint output path ('' to skip saving).
+        shift_pad: DrQ random-shift radius in pixels applied to training images
+            only (0 disables). See opt.augment.random_shift (arXiv:2004.13649).
+        proprio_dropout: Per-sample probability of zeroing the normalized state
+            during training only (0 disables). See opt.augment.proprio_dropout
+            (arXiv:2509.18644); eval/deploy always keeps the true state.
     """
 
     train_globs: str = DEFAULT_TRAIN_EPS
@@ -57,6 +62,8 @@ class TrainConfig:
     use_fp8: bool = False
     seed: int = 0
     out: str = ""
+    shift_pad: int = 0
+    proprio_dropout: float = 0.0
 
     def __post_init__(self) -> None:
         """Validate hyperparameters at the public boundary.
@@ -76,6 +83,12 @@ class TrainConfig:
             raise ValueError(f"k must be > 0, got {self.k}")
         if not 0.0 <= self.ema_decay < 1.0:
             raise ValueError(f"ema_decay must be in [0, 1), got {self.ema_decay}")
+        if self.shift_pad < 0:
+            raise ValueError(f"shift_pad must be >= 0, got {self.shift_pad}")
+        if not 0.0 <= self.proprio_dropout <= 1.0:
+            raise ValueError(
+                f"proprio_dropout must be in [0, 1], got {self.proprio_dropout}"
+            )
 
     @property
     def ema_enabled(self) -> bool:
@@ -100,6 +113,11 @@ class TrainResult:
     fp8_active: bool
     compile_mode: str
     ckpt_path: str = ""
+    # De-normalized full-chunk L1 (m/s), averaged over all K steps and 6 dims;
+    # ``best`` is the minimum over eval checkpoints. Defaults keep older callers
+    # that do not populate them working.
+    best_val_full_chunk: float = float("inf")
+    final_val_full_chunk: float = 0.0
 
 
 @dataclasses.dataclass(frozen=True)

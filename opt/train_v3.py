@@ -44,6 +44,7 @@ import torch  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
 
 import train_v2 as tv2  # noqa: E402  (repo-root module)
+from opt import augment  # noqa: E402
 from opt.config import TrainConfig, TrainResult  # noqa: E402
 
 _LOG = logging.getLogger("opt.train_v3")
@@ -216,6 +217,11 @@ def train(cfg: TrainConfig) -> TrainResult:
     opt = build_optimizer(model, cfg.lr, cfg.weight_decay, cfg.fused_adam)
     ema = EmaWeights(model, cfg.ema_decay) if cfg.ema_enabled else None
 
+    # Dedicated RNG for input augmentation so shifts/dropout are reproducible
+    # under cfg.seed and independent of the shuffle/model RNG stream.
+    aug_gen = torch.Generator(device=DEVICE)
+    aug_gen.manual_seed(cfg.seed)
+
     n_train = imt.shape[0]
 
     def run_epoch(images, states, actions, train_flag: bool) -> float:
@@ -229,8 +235,14 @@ def train(cfg: TrainConfig) -> TrainResult:
         tot = torch.zeros((), device=DEVICE)
         for i in range(0, n, cfg.bs):
             b = idx[i : i + cfg.bs]
+            img_b, st_b = images[b], states[b]
+            if train_flag:  # augment training batches only (never val/eval)
+                if cfg.shift_pad > 0:
+                    img_b = augment.random_shift(img_b, cfg.shift_pad, aug_gen)
+                if cfg.proprio_dropout > 0.0:
+                    st_b = augment.proprio_dropout(st_b, cfg.proprio_dropout, aug_gen)
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                pred = runnable(images[b], states[b])
+                pred = runnable(img_b, st_b)
                 loss = F.l1_loss(pred, actions[b])
             if train_flag:
                 opt.zero_grad(set_to_none=True)
@@ -242,20 +254,27 @@ def train(cfg: TrainConfig) -> TrainResult:
         return (tot / n).item()
 
     @torch.no_grad()
-    def val_first_action() -> float:
+    def val_action_l1() -> tuple[float, float]:
+        """Return (first-action, full-chunk) de-normalized L1 (m/s) on val."""
         runnable.eval()
-        err = 0.0
+        first_err = 0.0
+        chunk_err = 0.0
         for i in range(0, imv.shape[0], cfg.bs):
             b = slice(i, i + cfg.bs)
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 pred = runnable(imv[b], stv_n[b]).float()
-            err += ((pred[:, 0] - act_v_n[b][:, 0]).abs() * astd).mean(1).sum().item()
-        return err / imv.shape[0]
+            diff = (pred - act_v_n[b]).abs() * astd  # de-normalize, (nb, K, 6)
+            first_err += diff[:, 0].mean(1).sum().item()
+            chunk_err += diff.mean((1, 2)).sum().item()
+        nv = imv.shape[0]
+        return first_err / nv, chunk_err / nv
 
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     t0 = time.time()
-    final_train_loss, final_val_loss, best_first = 0.0, 0.0, float("inf")
+    final_train_loss, final_val_loss = 0.0, 0.0
+    best_first, best_chunk = float("inf"), float("inf")
+    final_chunk = 0.0
     for ep in range(cfg.epochs):
         final_train_loss = run_epoch(imt, stt_n, act_t_n, True)
         if ep % 5 == 0 or ep == cfg.epochs - 1:
@@ -263,7 +282,9 @@ def train(cfg: TrainConfig) -> TrainResult:
                 ema.apply_to(model)
             with torch.no_grad():
                 final_val_loss = run_epoch(imv, stv_n, act_v_n, False)
-            best_first = min(best_first, val_first_action())
+            first_err, final_chunk = val_action_l1()
+            best_first = min(best_first, first_err)
+            best_chunk = min(best_chunk, final_chunk)
             if ema is not None:
                 ema.restore(model)
     if torch.cuda.is_available():
@@ -309,6 +330,8 @@ def train(cfg: TrainConfig) -> TrainResult:
         fp8_active=fp8_active,
         compile_mode=cfg.compile_mode,
         ckpt_path=ckpt_path,
+        best_val_full_chunk=best_chunk,
+        final_val_full_chunk=final_chunk,
     )
 
 
@@ -334,12 +357,16 @@ def _parse_args(argv: list[str] | None = None) -> TrainConfig:
     ap.add_argument("--fp8", dest="use_fp8", action="store_true")
     ap.add_argument("--seed", type=int, default=TrainConfig.seed)
     ap.add_argument("--out", default=TrainConfig.out)
+    ap.add_argument("--shift-pad", type=int, default=TrainConfig.shift_pad,
+                    help="DrQ random-shift radius in px on train images (0=off).")
+    ap.add_argument("--proprio-dropout", type=float, default=TrainConfig.proprio_dropout,
+                    help="Per-sample state-zeroing probability on train (0=off).")
     a = ap.parse_args(argv)
     return TrainConfig(
         train_globs=a.train_globs, val_globs=a.val_globs, epochs=a.epochs, bs=a.bs,
         lr=a.lr, weight_decay=a.weight_decay, img=a.img, k=a.k, ema_decay=a.ema_decay,
         compile_mode=a.compile_mode, fused_adam=a.fused_adam, use_fp8=a.use_fp8,
-        seed=a.seed, out=a.out,
+        seed=a.seed, out=a.out, shift_pad=a.shift_pad, proprio_dropout=a.proprio_dropout,
     )
 
 
@@ -359,7 +386,8 @@ def main(argv: list[str] | None = None) -> None:
     print(
         f"[train_v3] final train_L1={res.final_train_loss:.4f}  "
         f"val_L1={res.final_val_loss:.4f}  "
-        f"best val first-action |err|={res.best_val_first_action:.5f} m/s"
+        f"best val first-action |err|={res.best_val_first_action:.5f} m/s  "
+        f"best val full-chunk |err|={res.best_val_full_chunk:.5f} m/s"
     )
     if res.ckpt_path:
         print(f"[train_v3] saved {res.ckpt_path}")

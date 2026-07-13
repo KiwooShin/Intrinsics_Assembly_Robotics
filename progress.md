@@ -5,6 +5,20 @@ Latest demo video: `demo/` (none yet — pipeline video pending first milestone)
 
 ---
 
+## 2026-07-12 ~19:00 — Campaign grinding; SC root-caused; dashboard live
+
+Phase-0 collection is at 10/40 KEEPs (oracle 92.6–93.9, 100% keep-rate) after
+a watchdog save (leaked recorder + un-launched campaign caught and fixed) and
+a mid-flight config swap that fixed a board-yaw sampling bug (77% of configs
+were out-of-distribution). SC failure root-caused: CheatCode has no SC branch
+and rams the rotated SC port frame — retarget to the `_entrance` frame is
+coded/tested, awaiting the post-campaign sim window. Scoreboard dashboard
+published as a live artifact; oracle demo video in ~/demo/.
+
+**Next 2 h:** campaign reaches the ~30-KEEP retrain trigger → retrain agent
+(shift-aug, both Ks) + first paired suite evaluation of all five checkpoints;
+then SC oracle validation at campaign end.
+
 ## 2026-07-12 ~17:00 — Arm unfrozen: 36 → 119/300 (+230%)
 
 Root cause was open-loop reference drift in the controller's velocity mode

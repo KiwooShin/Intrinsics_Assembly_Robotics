@@ -1,0 +1,657 @@
+<title>AIC Research Scoreboard</title>
+<style>
+  /* ===== Design tokens — "lab telemetry console": cool slate ground, signal-blue
+     trace, mono for data. Light default; dark applied via prefers-color-scheme
+     AND :root[data-theme=dark] override. ===== */
+  :root {
+    --plane: #eaeef2;
+    --surface: #ffffff;
+    --surface-2: #f4f7f9;
+    --inset: #eef2f6;
+    --ink: #131a22;
+    --ink-2: #46545f;
+    --muted: #6f7f8d;
+    --hair: #dde4ea;
+    --hair-2: #c9d3db;
+    --accent: #2a78d6;
+    --accent-2: #1c5cab;
+    --accent-soft: rgba(42,120,214,0.12);
+    --neutral-mark: #8c9aa8;   /* honest-baseline bar */
+    --good: #0a7d0a;           /* good text */
+    --good-mark: #0ca30c;      /* good chart fill */
+    --good-soft: rgba(12,163,12,0.14);
+    --warn: #9a6207;           /* warning text (dark amber for light bg) */
+    --warn-mark: #fab219;
+    --warn-soft: rgba(250,178,25,0.18);
+    --crit: #c62f2f;           /* critical text */
+    --crit-mark: #d03b3b;      /* critical chart fill */
+    --crit-soft: rgba(208,59,59,0.13);
+    --track: #d9e0e6;
+    --font-sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --font-mono: ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace;
+    --shadow: 0 1px 2px rgba(16,24,32,0.06), 0 1px 0 rgba(16,24,32,0.03);
+    --r: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --plane: #0a0d11;
+      --surface: #141a21;
+      --surface-2: #1a222b;
+      --inset: #10161d;
+      --ink: #eef3f7;
+      --ink-2: #9fb1c0;
+      --muted: #6b7b8a;
+      --hair: #232e38;
+      --hair-2: #30404c;
+      --accent: #3987e5;
+      --accent-2: #5ea1ee;
+      --accent-soft: rgba(57,135,229,0.18);
+      --neutral-mark: #5c6b78;
+      --good: #34c759;
+      --good-mark: #0ca30c;
+      --good-soft: rgba(12,163,12,0.20);
+      --warn: #fab219;
+      --warn-mark: #fab219;
+      --warn-soft: rgba(250,178,25,0.16);
+      --crit: #f06a6a;
+      --crit-mark: #d03b3b;
+      --crit-soft: rgba(208,59,59,0.20);
+      --track: #222d37;
+      --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.02);
+    }
+  }
+  :root[data-theme="dark"] {
+    --plane: #0a0d11;
+    --surface: #141a21;
+    --surface-2: #1a222b;
+    --inset: #10161d;
+    --ink: #eef3f7;
+    --ink-2: #9fb1c0;
+    --muted: #6b7b8a;
+    --hair: #232e38;
+    --hair-2: #30404c;
+    --accent: #3987e5;
+    --accent-2: #5ea1ee;
+    --accent-soft: rgba(57,135,229,0.18);
+    --neutral-mark: #5c6b78;
+    --good: #34c759;
+    --good-mark: #0ca30c;
+    --good-soft: rgba(12,163,12,0.20);
+    --warn: #fab219;
+    --warn-mark: #fab219;
+    --warn-soft: rgba(250,178,25,0.16);
+    --crit: #f06a6a;
+    --crit-mark: #d03b3b;
+    --crit-soft: rgba(208,59,59,0.20);
+    --track: #222d37;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.02);
+  }
+
+  * { box-sizing: border-box; }
+  .aic { font-family: var(--font-sans); color: var(--ink); background: var(--plane);
+    line-height: 1.5; -webkit-font-smoothing: antialiased; padding: 0 20px 64px; }
+  .wrap { max-width: 1140px; margin: 0 auto; }
+
+  /* --- signal top rule --- */
+  .signal { height: 3px; border-radius: 3px; margin: 0 -20px 0;
+    background: linear-gradient(90deg, transparent 0%, var(--accent) 12%, var(--accent) 30%,
+      var(--good-mark) 55%, var(--warn-mark) 74%, var(--crit-mark) 92%, transparent 100%);
+    opacity: 0.9; }
+
+  /* --- masthead --- */
+  .mast { display: flex; flex-wrap: wrap; gap: 18px 28px; align-items: flex-end;
+    justify-content: space-between; padding: 26px 0 20px; border-bottom: 1px solid var(--hair); }
+  .eyebrow { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--muted); }
+  .mast h1 { font-size: clamp(24px, 3.4vw, 34px); font-weight: 680; letter-spacing: -0.02em;
+    margin: 6px 0 4px; text-wrap: balance; }
+  .mast .sub { color: var(--ink-2); font-size: 14px; max-width: 60ch; }
+  .meta { text-align: right; font-family: var(--font-mono); font-size: 12px; color: var(--ink-2);
+    display: grid; gap: 3px; }
+  .meta b { color: var(--ink); font-weight: 620; }
+  .meta .live { color: var(--good); }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--good-mark); margin-right: 6px; vertical-align: middle;
+    box-shadow: 0 0 0 3px var(--good-soft); }
+
+  /* --- section scaffolding --- */
+  section { margin-top: 30px; }
+  .sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+  .sec-head h2 { font-size: 15px; font-weight: 660; letter-spacing: 0.01em; margin: 0; }
+  .sec-head .note { font-size: 12.5px; color: var(--muted); }
+
+  /* --- KPI tiles --- */
+  .kpis { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(168px,1fr)); }
+  .tile { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r);
+    padding: 14px 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 3px; }
+  .tile.hero { border-color: color-mix(in srgb, var(--accent) 40%, var(--hair));
+    box-shadow: var(--shadow), inset 3px 0 0 var(--accent); }
+  .tile .lab { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--muted); }
+  .tile .val { font-size: 30px; font-weight: 680; letter-spacing: -0.02em; line-height: 1.05; }
+  .tile.hero .val { font-size: 46px; }
+  .tile .val small { font-size: 0.5em; font-weight: 560; color: var(--ink-2); letter-spacing: 0; }
+  .tile .foot { font-size: 12px; color: var(--ink-2); }
+  .delta-up { color: var(--good); font-weight: 620; }
+
+  /* --- panels / cards --- */
+  .card { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r);
+    box-shadow: var(--shadow); padding: 18px 20px; }
+  .grid-2 { display: grid; gap: 18px; grid-template-columns: 1.35fr 1fr; align-items: start; }
+  @media (max-width: 860px) { .grid-2 { grid-template-columns: 1fr; } }
+
+  .chart-wrap { overflow-x: auto; }
+  .chart-wrap svg { width: 100%; min-width: 520px; height: auto; display: block; }
+  .cap { font-size: 12.5px; color: var(--ink-2); margin-top: 10px; }
+  .cap .flag { color: var(--crit); font-weight: 600; }
+
+  /* --- campaign meter --- */
+  .meter { display: flex; flex-wrap: wrap; gap: 3px; margin: 4px 0 12px; }
+  .cell { width: 15px; height: 22px; border-radius: 3px; background: var(--track); }
+  .cell.keep { background: var(--good-mark); }
+  .cell.drop { background: var(--crit-mark); }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--ink-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+
+  /* --- tables --- */
+  .scroll-x { overflow-x: auto; border: 1px solid var(--hair); border-radius: var(--r);
+    background: var(--surface); box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  thead th { position: sticky; top: 0; background: var(--surface-2); text-align: left;
+    font-weight: 620; color: var(--ink-2); font-size: 11px; letter-spacing: 0.05em;
+    text-transform: uppercase; padding: 9px 12px; border-bottom: 1px solid var(--hair-2);
+    white-space: nowrap; }
+  tbody td { padding: 9px 12px; border-bottom: 1px solid var(--hair); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num, th.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    white-space: nowrap; }
+  .lane { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+  .xp-name { font-weight: 560; }
+  .xp-sub { color: var(--ink-2); font-size: 12px; }
+
+  /* --- verdict pills (status = tint + dot + word; never color alone) --- */
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px 2px 7px;
+    border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .pill.ok { background: var(--good-soft); color: var(--good); }
+  .pill.ok::before { background: var(--good-mark); }
+  .pill.bad { background: var(--crit-soft); color: var(--crit); }
+  .pill.bad::before { background: var(--crit-mark); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .pill.warn::before { background: var(--warn-mark); }
+  .pill.info { background: var(--accent-soft); color: var(--accent-2); }
+  .pill.info::before { background: var(--accent); }
+  .pill.mute { background: var(--inset); color: var(--muted); }
+  .pill.mute::before { background: var(--muted); }
+
+  /* --- papers --- */
+  .papers { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(320px,1fr)); }
+  .paper { border: 1px solid var(--hair); border-radius: var(--r); background: var(--surface);
+    box-shadow: var(--shadow); padding: 12px 14px; display: grid; gap: 4px; }
+  .paper .arx { font-family: var(--font-mono); font-size: 11px; color: var(--accent-2); }
+  .paper .why { font-size: 12.5px; color: var(--ink-2); }
+  .paper .tt { font-weight: 580; font-size: 13px; }
+
+  details { margin-top: 10px; }
+  details summary { cursor: pointer; font-size: 12px; color: var(--accent-2);
+    font-family: var(--font-mono); letter-spacing: 0.03em; }
+  details[open] summary { margin-bottom: 8px; }
+
+  .banner { display: flex; gap: 10px; align-items: flex-start; padding: 11px 14px;
+    border-radius: var(--r); background: var(--warn-soft);
+    border: 1px solid color-mix(in srgb, var(--warn-mark) 40%, transparent);
+    font-size: 12.5px; color: var(--ink); margin-top: 14px; }
+  .banner b { color: var(--warn); }
+
+  footer { margin-top: 36px; padding-top: 18px; border-top: 1px solid var(--hair);
+    font-size: 12px; color: var(--muted); display: grid; gap: 8px; }
+  footer code { font-family: var(--font-mono); color: var(--ink-2); font-size: 11.5px; }
+  footer .prov { display: flex; flex-wrap: wrap; gap: 6px 10px; }
+  footer .prov code { background: var(--inset); padding: 1px 6px; border-radius: 5px; }
+
+  /* --- tooltip --- */
+  #tt { position: fixed; z-index: 50; pointer-events: none; max-width: 280px;
+    background: var(--surface); color: var(--ink); border: 1px solid var(--hair-2);
+    border-radius: 8px; padding: 8px 10px; font-size: 12px; line-height: 1.4;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.22); opacity: 0; transition: opacity .1s; }
+  #tt .h { font-weight: 660; margin-bottom: 2px; }
+  #tt .v { font-family: var(--font-mono); }
+  [data-tip] { cursor: default; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="aic">
+<div class="signal"></div>
+<div class="wrap">
+
+  <header class="mast">
+    <div>
+      <div class="eyebrow">Intrinsics Assembly Robotics · 48 h autonomous run</div>
+      <h1>AIC Research Scoreboard</h1>
+      <div class="sub">Imitation-learning pipeline for robotic connector insertion — a UR5e
+        seating SFP / SC plugs into NIC ports. Live snapshot of the headline in-sim score,
+        experiment verdicts, and the Phase-0 data campaign.</div>
+    </div>
+    <div class="meta">
+      <div><span class="dot"></span><span class="live">campaign running</span> · demo 9 / 40</div>
+      <div>run started <b>2026-07-12 13:00</b></div>
+      <div>generated <b>2026-07-12 18:34 PDT</b></div>
+    </div>
+  </header>
+
+  <!-- ===== KPI STRIP ===== -->
+  <section aria-label="Key numbers">
+    <div class="kpis">
+      <div class="tile hero">
+        <div class="lab">Current best · eval_config</div>
+        <div class="val">119.4 <small>/ 300</small></div>
+        <div class="foot"><span class="delta-up">+230%</span> vs honest baseline · position-mode fix</div>
+      </div>
+      <div class="tile">
+        <div class="lab">Honest baseline</div>
+        <div class="val">36.1 <small>/ 300</small></div>
+        <div class="foot">velocity-mode, true starting point</div>
+      </div>
+      <div class="tile">
+        <div class="lab">Demos available</div>
+        <div class="val">24</div>
+        <div class="foot">16 legacy + 8 new KEEP</div>
+      </div>
+      <div class="tile">
+        <div class="lab">Phase-0 campaign</div>
+        <div class="val">8 <small>/ 40</small></div>
+        <div class="foot">KEEP · oracle ~93 / 100 each</div>
+      </div>
+      <div class="tile">
+        <div class="lab">Inference latency</div>
+        <div class="val">0.11<small>–0.27 ms</small></div>
+        <div class="foot">compiled-bf16 → eager · ~900× under 4 Hz</div>
+      </div>
+      <div class="tile">
+        <div class="lab">GPU throughput</div>
+        <div class="val">6,475 <small>fr/s</small></div>
+        <div class="foot">max-autotune · 96% util</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== SCORE TRAJECTORY ===== -->
+  <section>
+    <div class="sec-head">
+      <h2>Score trajectory — official eval_config</h2>
+      <span class="note">3 trials × 100 pts (max 300). Dashed lines mark scoring milestones.</span>
+    </div>
+    <div class="card">
+      <div class="chart-wrap"><div id="traj"></div></div>
+      <div class="cap">
+        <span class="flag">The 73.4 is a discredited artifact:</span> the arm barely moved
+        (EE path ~0 m) — millimetre/s velocity commands died below the impedance controller,
+        so the score reflects starting proximity, not policy skill. The honest starting point is
+        <b>36.1</b>; the receding-horizon MODE_POSITION fix raised it to <b>119.4</b>, with
+        directed approaches to 5–6 cm of the port in all three trials.
+      </div>
+      <details>
+        <summary>show milestone values as table</summary>
+        <div class="scroll-x"><table>
+          <thead><tr><th>Milestone</th><th class="num">Score / 300</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>Proximity only</td><td class="num">~78</td><td>plug near port, not inserted</td></tr>
+            <tr><td>Partial insertion</td><td class="num">~189</td><td>plug entered port bounding box</td></tr>
+            <tr><td>Full insertion (slow)</td><td class="num">~240</td><td>seated, but &gt;5 s</td></tr>
+            <tr><td>Target — full, &lt;5 s, smooth</td><td class="num">~297</td><td>competition target</td></tr>
+          </tbody>
+        </table></div>
+      </details>
+    </div>
+  </section>
+
+  <!-- ===== CAMPAIGN + STRATA ===== -->
+  <section>
+    <div class="sec-head">
+      <h2>Phase-0 stratified collection</h2>
+      <span class="note">CheatCode oracle demos, storage-light, one per rail × port stratum. Keep threshold: score ≥ 60.</span>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="lab" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)">Campaign progress · 8 / 40 kept</div>
+        <div id="meter" class="meter"></div>
+        <div class="legend">
+          <span><i class="sw" style="background:var(--good-mark)"></i> KEEP (8)</span>
+          <span><i class="sw" style="background:var(--crit-mark)"></i> DROP — SC unsolved (1)</span>
+          <span><i class="sw" style="background:var(--track)"></i> pending (31)</span>
+        </div>
+        <div class="cap">Demo 9 / 40 (<code style="font-family:var(--font-mono);font-size:11.5px">rail4 · port0</code>)
+          in progress. Every KEEP episode is 530 trimmed frames ending at the seated plug.
+          The lone DROP (SC, score 19.07) exposed a real bug, not a fluke — see the log below.</div>
+      </div>
+      <div class="card">
+        <div class="lab" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Oracle score per stratum</div>
+        <div class="chart-wrap"><div id="strata"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== EXPERIMENT LOG ===== -->
+  <section>
+    <div class="sec-head">
+      <h2>Experiment log — 2026-07-12</h2>
+      <span class="note">Verdict + key metric per experiment. Detail on hover / in source reports.</span>
+    </div>
+    <div class="scroll-x"><table>
+      <thead><tr>
+        <th>Lane</th><th>Experiment</th><th>Verdict</th><th>Key metric / evidence</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td class="lane">Arm</td>
+          <td><div class="xp-name">MODE_VELOCITY deadband hypothesis</div>
+              <div class="xp-sub">did the impedance controller ignore small twists?</div></td>
+          <td><span class="pill bad">Refuted</span></td>
+          <td>cmd 0.028 m/s already moved the arm; clamp is 0.25 m/s — no deadband</td>
+        </tr>
+        <tr>
+          <td class="lane">Arm</td>
+          <td><div class="xp-name">Root cause: open-loop reference drift</div>
+              <div class="xp-sub">controller never re-anchors to measured TCP</div></td>
+          <td><span class="pill ok">Confirmed</span></td>
+          <td><code style="font-family:var(--font-mono);font-size:11.5px">aic_controller.cpp:1060</code> — reference integrates open-loop</td>
+        </tr>
+        <tr>
+          <td class="lane">Arm</td>
+          <td><div class="xp-name">Receding-horizon MODE_POSITION fix</div>
+              <div class="xp-sub">integrate first 4 twists from measured TCP, ~18 Hz sub-step</div></td>
+          <td><span class="pill ok">Success</span></td>
+          <td class="num">36.1 → 119.4 / 300 &nbsp;(<span class="delta-up">+230%</span>)</td>
+        </tr>
+        <tr>
+          <td class="lane">Arm</td>
+          <td><div class="xp-name">Full insertion (last inch)</div>
+              <div class="xp-sub">near-port view ≈ seated end-state → predicts ~0 velocity</div></td>
+          <td><span class="pill warn">Not yet</span></td>
+          <td>stalls 5–6 cm short — the DAgger / data-lane target</td>
+        </tr>
+        <tr>
+          <td class="lane">Sweep</td>
+          <td><div class="xp-name">ASHA hyperparameter sweep (12 trials)</div>
+              <div class="xp-sub">winner: lr 1e-3, K 8, img 128, 54 ep</div></td>
+          <td><span class="pill info">Narrowing</span></td>
+          <td class="num">first-action 0.00316 vs 0.00374 (−15.6%) — <span style="font-family:var(--font-sans)">proxy metric; gate on suite score</span></td>
+        </tr>
+        <tr>
+          <td class="lane">Reg</td>
+          <td><div class="xp-name">W1 · random pixel-shift aug (shift8, K 8)</div>
+              <div class="xp-sub">near-mandatory per ACT / DrQ literature</div></td>
+          <td><span class="pill ok">Win (diag.)</span></td>
+          <td class="num">first-action −16.2% &nbsp;(0.00222 vs 0.00265)</td>
+        </tr>
+        <tr>
+          <td class="lane">Reg</td>
+          <td><div class="xp-name">W1 · proprioception dropout (0.5 / 0.8)</div>
+              <div class="xp-sub">absolute-action policy; shortcut-breaking not yet realised</div></td>
+          <td><span class="pill bad">Loss (diag.)</span></td>
+          <td class="num">first-action +23% to +32% vs baseline</td>
+        </tr>
+        <tr>
+          <td class="lane">SC oracle</td>
+          <td><div class="xp-name">CheatCode on generated SC config</div>
+              <div class="xp-sub">no SC branch — targets the SFP-calibrated frame</div></td>
+          <td><span class="pill bad">Fail</span></td>
+          <td class="num">19.07 / 100 — plug stalls 2 cm out, gripper hits target port</td>
+        </tr>
+        <tr>
+          <td class="lane">SC oracle</td>
+          <td><div class="xp-name">gen_config yaw sampler</div>
+              <div class="xp-sub">U(−π,π) makes yaw≈0 boards OOD / unreachable</div></td>
+          <td><span class="pill warn">Bug found</span></td>
+          <td>eval yaws cluster {±3.1, 3.0, −1.8}; eval-band sampler dispatched</td>
+        </tr>
+        <tr>
+          <td class="lane">Data</td>
+          <td><div class="xp-name">Phase-0 campaign (SFP)</div>
+              <div class="xp-sub">resumable, storage-light, 1 demo / stratum</div></td>
+          <td><span class="pill info">Running</span></td>
+          <td class="num">8 / 40 KEEP · oracle 92.6–93.9 / 100 · 1 SC DROP</td>
+        </tr>
+      </tbody>
+    </table></div>
+
+    <div class="banner">
+      <span style="font-size:15px;line-height:1">▲</span>
+      <div><b>Metric caveat.</b> The sweep and W1 numbers are <b>first-action L1</b> proxies —
+        our own Finding #1 (arXiv:2602.22100) says val L1 does <b>not</b> predict task success.
+        They are hyperparameter narrowing, <b>not validated policy gains</b>; adoption gates on the
+        matched-seed in-sim suite score (rliable IQM + bootstrap CI). K=8's edge is also a
+        selection-metric artifact — the objective only scores action[0].</div>
+    </div>
+
+    <details>
+      <summary>show full W1 regularizer matrix (first-action &amp; full-chunk L1, secondary diagnostics)</summary>
+      <div class="scroll-x"><table>
+        <thead><tr>
+          <th>Experiment</th><th class="num">K</th><th>Verdict</th>
+          <th class="num">first-action L1 (m/s)</th><th class="num">full-chunk L1 (m/s)</th>
+        </tr></thead>
+        <tbody>
+          <tr><td>baseline</td><td class="num">8</td><td><span class="pill mute">base</span></td><td class="num">0.00265 ± 0.00007</td><td class="num">0.00245 ± 0.00003</td></tr>
+          <tr><td>shift4</td><td class="num">8</td><td><span class="pill ok">−15.5%</span></td><td class="num">0.00224 ± 0.00017</td><td class="num">0.00217 ± 0.00014</td></tr>
+          <tr><td>shift8</td><td class="num">8</td><td><span class="pill ok">−16.2%</span></td><td class="num">0.00222 ± 0.00023</td><td class="num">0.00213 ± 0.00019</td></tr>
+          <tr><td>dropout0.5</td><td class="num">8</td><td><span class="pill bad">+23.1%</span></td><td class="num">0.00326 ± 0.00023</td><td class="num">0.00298 ± 0.00018</td></tr>
+          <tr><td>dropout0.8</td><td class="num">8</td><td><span class="pill bad">+27.9%</span></td><td class="num">0.00338 ± 0.00012</td><td class="num">0.00310 ± 0.00009</td></tr>
+          <tr><td>shift8 + dropout0.5</td><td class="num">8</td><td><span class="pill ok">−14.6%</span></td><td class="num">0.00226 ± 0.00012</td><td class="num">0.00216 ± 0.00010</td></tr>
+          <tr><td>baseline</td><td class="num">16</td><td><span class="pill mute">base</span></td><td class="num">0.00253 ± 0.00008</td><td class="num">0.00221 ± 0.00009</td></tr>
+          <tr><td>shift4</td><td class="num">16</td><td><span class="pill ok">−7.1%</span></td><td class="num">0.00235 ± 0.00011</td><td class="num">0.00207 ± 0.00010</td></tr>
+          <tr><td>shift8</td><td class="num">16</td><td><span class="pill ok">−5.7%</span></td><td class="num">0.00238 ± 0.00008</td><td class="num">0.00217 ± 0.00006</td></tr>
+          <tr><td>dropout0.5</td><td class="num">16</td><td><span class="pill bad">+32.0%</span></td><td class="num">0.00334 ± 0.00010</td><td class="num">0.00275 ± 0.00009</td></tr>
+          <tr><td>dropout0.8</td><td class="num">16</td><td><span class="pill bad">+28.2%</span></td><td class="num">0.00324 ± 0.00006</td><td class="num">0.00273 ± 0.00007</td></tr>
+          <tr><td>shift4 + dropout0.5</td><td class="num">16</td><td><span class="pill ok">−11.2%</span></td><td class="num">0.00224 ± 0.00020</td><td class="num">0.00204 ± 0.00010</td></tr>
+        </tbody>
+      </table></div>
+    </details>
+  </section>
+
+  <!-- ===== PAPERS ===== -->
+  <section>
+    <div class="sec-head">
+      <h2>Papers driving decisions</h2>
+      <span class="note">ResearchPlan §1 — evidence → decision. Every technical call is traceable to a source.</span>
+    </div>
+    <div class="papers">
+      <div class="paper"><div class="arx">arXiv:2602.22100</div><div class="tt">Connector-insertion BC scaling</div><div class="why">CNN encoders beat transformer backbones 7–8×; val L1 does not predict success → scale demos 16→150+, select by scored rollouts.</div></div>
+      <div class="paper"><div class="arx">arXiv:2410.18647</div><div class="tt">Diversity &gt; count (ICLR'25 oral)</div><div class="why">Generalization scales with config diversity, not demos per config → stratified collection, ≤1–2 demos per exact cell.</div></div>
+      <div class="paper"><div class="arx">arXiv:2507.09061 · DART</div><div class="tt">Chunking + noise injection</div><div class="why">Action chunking with noise-injected collection provably kills compounding error — oracle relabeling is free.</div></div>
+      <div class="paper"><div class="arx">arXiv:2509.18644</div><div class="tt">Proprioception shortcut</div><div class="why">Proprio state becomes a shortcut that kills spatial generalization → train with 50–80% TCP-pose dropout (needs relative actions).</div></div>
+      <div class="paper"><div class="arx">arXiv:2409.11925 · Haptic-ACT</div><div class="tt">Force/torque token</div><div class="why">F/T input lifts contact-phase success (80% vs 50% vision-only) → record + feed wrench; pipeline was dropping it.</div></div>
+      <div class="paper"><div class="arx">arXiv:2304.13705 · ACT</div><div class="tt">Chunk multimodality + shift-aug</div><div class="why">Far-future chunk error is a multimodality symptom; random pixel-shift is near-mandatory (73%→27% without) → CVAE/VQ head A/B.</div></div>
+      <div class="paper"><div class="arx">arXiv:2506.05165 · LiPo</div><div class="tt">Chunk-boundary smoothing</div><div class="why">Boundary jerk/stalls leak smoothness + duration points; LiPo blends without retraining → wrap deployment.</div></div>
+      <div class="paper"><div class="arx">arXiv:2407.16677 · 2412.09858</div><div class="tt">Residual RL → re-distill (ResiP / RLDG)</div><div class="why">Residual RL on frozen chunked BC: 5%→99% on tight pegs; engine sub-scores are a ready shaped reward → Stage-2.</div></div>
+      <div class="paper"><div class="arx">arXiv:2108.13264 · rliable</div><div class="tt">Matched-seed evaluation</div><div class="why">Paired matched-seed eval + IQM + bootstrap CIs separates policies at small n → fixed 50-config suite, same seeds.</div></div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="prov">
+      <span>Sources parsed:</span>
+      <code>SESSION_REPORT.md</code><code>progress.md</code><code>Plan.md</code>
+      <code>ResearchPlan.md</code><code>opt/results/w1_report.md</code>
+      <code>opt/results/leaderboard.md</code><code>opt/results/bench_infer.json</code>
+      <code>~/training/ds_phase0/campaign_log.csv</code>
+    </div>
+    <div>Static snapshot generated <b style="color:var(--ink-2)">2026-07-12 18:34 PDT</b>.
+      All figures transcribed from the repo — no fabricated values, no invented precision.
+      The 73.4 score is retained only to document the discredited frozen-arm artifact.
+      Governed by <code>CLAUDE.md</code> · primary metric = matched-seed in-sim suite score (IQM + CI).</div>
+  </footer>
+
+</div>
+</div>
+
+<div id="tt" role="tooltip"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------- embedded data (literals transcribed from the repo) ----------
+  var TRAJ = [
+    { label: "Frozen-arm\nartifact", score: 73.4, kind: "artifact",
+      tip: "Discredited artifact. Arm barely moved (EE path ~0 m); mm/s velocity commands died below the impedance controller. Score reflects starting proximity, not skill." },
+    { label: "Honest\nbaseline", score: 36.1, kind: "baseline",
+      tip: "v2_wide.pt measured honestly in MODE_VELOCITY. The true starting point." },
+    { label: "Position-mode\nfix (current)", score: 119.4, kind: "current",
+      tip: "Receding-horizon MODE_POSITION with per-inference re-anchor to measured TCP. +230% vs baseline; directed approach in all 3 trials, 5-6 cm from the port." }
+  ];
+  var MILES = [
+    { v: 78, label: "proximity ~78" },
+    { v: 189, label: "partial ~189" },
+    { v: 240, label: "full (slow) ~240" },
+    { v: 297, label: "target ~297" }
+  ];
+  var STRATA = [
+    { name: "rail0 · port0", plug: "SFP", score: 92.61, status: "keep" },
+    { name: "rail0 · port1", plug: "SFP", score: 92.89, status: "keep" },
+    { name: "rail1 · port0", plug: "SFP", score: 93.36, status: "keep" },
+    { name: "rail1 · port1", plug: "SFP", score: 93.22, status: "keep" },
+    { name: "rail2 · port0", plug: "SFP", score: 93.24, status: "keep" },
+    { name: "rail2 · port1", plug: "SFP", score: 93.72, status: "keep" },
+    { name: "rail3 · port0", plug: "SFP", score: 93.64, status: "keep" },
+    { name: "rail3 · port1", plug: "SFP", score: 93.93, status: "keep" },
+    { name: "rail0 (SC)",   plug: "SC",  score: 19.07, status: "drop" }
+  ];
+  var CAMPAIGN = { kept: 8, dropped: 1, planned: 40 };
+
+  var SVGNS = "http://www.w3.org/2000/svg";
+  function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+  // ---------- tooltip ----------
+  var tt = document.getElementById("tt");
+  function showTip(html, x, y){
+    tt.innerHTML = html; tt.style.opacity = "1";
+    var w = tt.offsetWidth, h = tt.offsetHeight;
+    var px = x + 14, py = y + 14;
+    if (px + w > window.innerWidth - 8) px = x - w - 14;
+    if (py + h > window.innerHeight - 8) py = y - h - 14;
+    tt.style.left = Math.max(8, px) + "px";
+    tt.style.top = Math.max(8, py) + "px";
+  }
+  function hideTip(){ tt.style.opacity = "0"; }
+  document.addEventListener("mousemove", function (e){
+    var t = e.target.closest ? e.target.closest("[data-tip]") : null;
+    if (t) showTip(t.getAttribute("data-tip"), e.clientX, e.clientY);
+    else hideTip();
+  });
+
+  // ---------- score trajectory (vertical bars) ----------
+  function renderTraj(){
+    var W = 720, H = 380, padL = 52, padR = 152, padT = 24, padB = 46;
+    var x0 = padL, x1 = W - padR, baseY = H - padB, topY = padT;
+    var plotH = baseY - topY, plotW = x1 - x0, DOM = 300;
+    var yFor = function (v){ return baseY - (v / DOM) * plotH; };
+    var s = [];
+    s.push('<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Score trajectory chart">');
+    s.push('<defs><pattern id="hatch" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">' +
+           '<rect width="7" height="7" fill="var(--crit-mark)" opacity="0.30"/>' +
+           '<line x1="0" y1="0" x2="0" y2="7" stroke="var(--crit-mark)" stroke-width="3"/></pattern></defs>');
+    // y gridlines + ticks
+    [0,100,200,300].forEach(function (v){
+      var y = yFor(v);
+      s.push('<line x1="'+x0+'" y1="'+y+'" x2="'+x1+'" y2="'+y+'" stroke="var(--hair)" stroke-width="1"/>');
+      s.push('<text x="'+(x0-10)+'" y="'+(y+4)+'" text-anchor="end" font-family="var(--font-mono)" font-size="12" fill="var(--muted)">'+v+'</text>');
+    });
+    // milestone reference lines (dashed annotation)
+    MILES.forEach(function (m){
+      var y = yFor(m.v);
+      s.push('<line x1="'+x0+'" y1="'+y+'" x2="'+x1+'" y2="'+y+'" stroke="var(--accent)" stroke-width="1" stroke-dasharray="5 4" opacity="0.55"/>');
+      s.push('<text x="'+(x1+8)+'" y="'+(y+4)+'" font-family="var(--font-mono)" font-size="11.5" fill="var(--ink-2)">'+esc(m.label)+'</text>');
+    });
+    // bars
+    var slot = plotW / TRAJ.length, barW = 50, r = 6;
+    var fillFor = { artifact: "url(#hatch)", baseline: "var(--neutral-mark)", current: "var(--accent)" };
+    TRAJ.forEach(function (d, i){
+      var cx = x0 + slot * (i + 0.5), bx = cx - barW/2;
+      var ty = yFor(d.score), bh = baseY - ty;
+      // rounded-top, square-baseline path
+      var path = 'M'+bx+' '+baseY+' L'+bx+' '+(ty+r)+' Q'+bx+' '+ty+' '+(bx+r)+' '+ty+
+                 ' L'+(bx+barW-r)+' '+ty+' Q'+(bx+barW)+' '+ty+' '+(bx+barW)+' '+(ty+r)+
+                 ' L'+(bx+barW)+' '+baseY+' Z';
+      var op = d.kind === "artifact" ? ' opacity="0.9"' : '';
+      s.push('<path d="'+path+'" fill="'+fillFor[d.kind]+'"'+op+'/>');
+      if (d.kind === "artifact")
+        s.push('<path d="'+path+'" fill="none" stroke="var(--crit-mark)" stroke-width="1.3" opacity="0.7"/>');
+      // value label on cap
+      var vcol = d.kind === "artifact" ? "var(--crit)" : (d.kind === "current" ? "var(--accent-2)" : "var(--ink-2)");
+      s.push('<text x="'+cx+'" y="'+(ty-9)+'" text-anchor="middle" font-family="var(--font-mono)" font-size="15" font-weight="700" fill="'+vcol+'">'+d.score.toFixed(1)+'</text>');
+      if (d.kind === "artifact")
+        s.push('<text x="'+cx+'" y="'+(ty-26)+'" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" letter-spacing="0.12em" fill="var(--crit)">DISCREDITED</text>');
+      // x labels (two lines)
+      d.label.split("\n").forEach(function (ln, li){
+        s.push('<text x="'+cx+'" y="'+(baseY+18+li*14)+'" text-anchor="middle" font-size="12" fill="var(--ink-2)">'+esc(ln)+'</text>');
+      });
+      // hit target
+      s.push('<rect x="'+bx+'" y="'+topY+'" width="'+barW+'" height="'+(baseY-topY)+'" fill="transparent" data-tip="'+
+             esc('<div class=&quot;h&quot;>'+d.label.replace("\n"," ")+'</div><div class=&quot;v&quot;>'+d.score.toFixed(1)+' / 300</div>'+d.tip)+'"/>');
+    });
+    s.push('</svg>');
+    document.getElementById("traj").innerHTML = s.join("");
+  }
+
+  // ---------- per-stratum oracle scores (horizontal bars) ----------
+  function renderStrata(){
+    var W = 720, H = 300, padL = 132, padR = 58, padT = 12, padB = 30;
+    var x0 = padL, x1 = W - padR, DOM = 100;
+    var xFor = function (v){ return x0 + (v / DOM) * (x1 - x0); };
+    var n = STRATA.length, areaH = (H - padT - padB), rowH = areaH / n, th = 14, r = 4;
+    var s = [];
+    s.push('<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Oracle score per stratum">');
+    // x gridlines
+    [0,50,100].forEach(function (v){
+      var x = xFor(v);
+      s.push('<line x1="'+x+'" y1="'+padT+'" x2="'+x+'" y2="'+(H-padB)+'" stroke="var(--hair)" stroke-width="1"/>');
+      s.push('<text x="'+x+'" y="'+(H-padB+18)+'" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--muted)">'+v+'</text>');
+    });
+    // keep threshold @60
+    var xt = xFor(60);
+    s.push('<line x1="'+xt+'" y1="'+padT+'" x2="'+xt+'" y2="'+(H-padB)+'" stroke="var(--warn-mark)" stroke-width="1" stroke-dasharray="4 3" opacity="0.8"/>');
+    s.push('<text x="'+xt+'" y="'+(padT+2)+'" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--warn)">keep ≥ 60</text>');
+    STRATA.forEach(function (d, i){
+      var cy = padT + rowH * (i + 0.5), by = cy - th/2;
+      var xv = xFor(d.score), bw = xv - x0;
+      var fill = d.status === "keep" ? "var(--good-mark)" : "var(--crit-mark)";
+      var rr = Math.min(r, bw);
+      var path = 'M'+x0+' '+(by)+' L'+(x0+bw-rr)+' '+by+' Q'+(x0+bw)+' '+by+' '+(x0+bw)+' '+(by+rr)+
+                 ' L'+(x0+bw)+' '+(by+th-rr)+' Q'+(x0+bw)+' '+(by+th)+' '+(x0+bw-rr)+' '+(by+th)+
+                 ' L'+x0+' '+(by+th)+' Z';
+      s.push('<path d="'+path+'" fill="'+fill+'"/>');
+      // left label
+      s.push('<text x="'+(x0-10)+'" y="'+(cy+4)+'" text-anchor="end" font-size="12" fill="var(--ink-2)">'+esc(d.name)+'</text>');
+      // value + status at tip
+      var vcol = d.status === "keep" ? "var(--good)" : "var(--crit)";
+      s.push('<text x="'+(xv+7)+'" y="'+(cy+4)+'" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="'+vcol+'">'+d.score.toFixed(2)+'  '+(d.status==="keep"?"KEEP":"DROP")+'</text>');
+      // hit target
+      s.push('<rect x="'+x0+'" y="'+by+'" width="'+(x1-x0)+'" height="'+th+'" fill="transparent" data-tip="'+
+             esc('<div class=&quot;h&quot;>'+d.name+' · '+d.plug+'</div><div class=&quot;v&quot;>CheatCode oracle '+d.score.toFixed(2)+' / 100</div>'+(d.status==="keep"?"Kept (≥60).":"Dropped — SC has no oracle branch yet."))+'"/>');
+    });
+    s.push('</svg>');
+    document.getElementById("strata").innerHTML = s.join("");
+  }
+
+  // ---------- campaign segmented meter ----------
+  function renderMeter(){
+    var host = document.getElementById("meter");
+    var html = "";
+    for (var i = 0; i < CAMPAIGN.planned; i++){
+      var cls = "cell", tip = "pending stratum";
+      if (i < CAMPAIGN.kept){ cls += " keep"; tip = "KEEP — oracle ~93/100"; }
+      else if (i < CAMPAIGN.kept + CAMPAIGN.dropped){ cls += " drop"; tip = "DROP — SC config, score 19.07"; }
+      html += '<div class="'+cls+'" data-tip="'+esc('<div class=&quot;v&quot;>demo '+(i+1)+' / '+CAMPAIGN.planned+'</div>'+tip)+'"></div>';
+    }
+    host.innerHTML = html;
+  }
+
+  renderTraj();
+  renderStrata();
+  renderMeter();
+})();
+</script>

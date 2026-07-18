@@ -107,6 +107,14 @@ you touch it substantially.
   manifest (hash), config incl. chunk K, fixed epoch budget, seed set. Report
   both K=8 and K=16 where relevant; prefer mean of 3 seeds for adoption
   decisions.
+- **Agent-waiter ban (2026-07-18, after 3 documented stalls):** sub-agents must
+  NOT pause themselves waiting on self-armed monitors/waiters to sequence
+  multi-stage pipelines — those wake-ups repeatedly failed to fire (collection
+  17:26, retrain 21:59, suite-eval overnight). Every multi-stage job runs as a
+  DETACHED, RESUMABLE script (`collect_campaign.sh`, `eval_batch.sh` pattern):
+  nohup + progress log + skip-if-done resume + a DONE marker line. Agents
+  launch it, verify the first unit completes, then report and exit. The
+  orchestrator's watchdog monitors the log file, which survives heartbeat gaps.
 - **5-minute liveness watchdog:** the orchestrator checks overall status every
   ~5 minutes: running processes (sim, training, collection), sub-agent activity
   (output growth), and GPU/CPU utilization. A process/agent with no observable

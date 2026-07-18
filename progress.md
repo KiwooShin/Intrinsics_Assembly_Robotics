@@ -5,6 +5,22 @@ Latest demo video: `demo/` (none yet — pipeline video pending first milestone)
 
 ---
 
+## 2026-07-18 08:50 — Overnight stall root-caused; self-driving eval batch launched
+
+The suite evaluation stalled after run 1 of 3 (~01:23): the eval agent parked
+on a self-armed completion monitor that never fired — the third such failure —
+and the orchestrator heartbeat was also silent overnight, so nothing caught
+it. Fix (user-directed): multi-stage pipelines now run as detached resumable
+scripts (`eval_batch.sh`, mirroring collect_campaign.sh) with progress logs +
+DONE markers; agent-waiter pattern banned in CLAUDE.md §6. Batch relaunched:
+p1_k16 evaluating now, v2_wide control next (~3 h). ⚠️ First result is
+alarming: p1_k8 scored ~0/100 (0/15 insertions, 14 miss + 1 collision) — the
+v2_wide control through the same harness will show whether it's a harness
+wiring bug (checkpoint not loading) or a real P1 training regression.
+
+**Next 2 h:** batch grinds runs (b)+(c); on EVALBATCHDONE → paired compare +
+analysis agent + root-cause of the p1_k8 collapse.
+
 ## 2026-07-17 21:45 — SC oracle fixed (19→94) + SC data collected; retrain launched
 
 The CheatCode SC fix validated at 94.1–94.3 with zero contacts on both test

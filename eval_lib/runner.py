@@ -48,6 +48,13 @@ class SimEnv:
         egl_vendor_library_filenames: ``__EGL_VENDOR_LIBRARY_FILENAMES`` value.
         display: X ``DISPLAY`` for headless rendering.
         zenoh_startup_s: Seconds to wait after starting ``rmw_zenohd``.
+        policy_launch_cmd: Command that launches the policy node, before the
+            ``--ros-args`` block. Defaults to ``ros2 run aic_model aic_model``,
+            which runs the installed entry point under the system interpreter
+            (``/usr/bin/python3``, no torch). Torch-backed policies such as
+            ``DeployACT`` require the deploy venv interpreter, e.g.
+            ``/home/kiwoos/venvs/aic-deploy/bin/python
+            /home/kiwoos/ws_aic/install/lib/aic_model/aic_model``.
     """
 
     ros_setup: str = "/opt/ros/kilted/setup.bash"
@@ -59,6 +66,10 @@ class SimEnv:
     egl_vendor_library_filenames: str = "/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
     display: str = ":2"
     zenoh_startup_s: int = 8
+    policy_launch_cmd: str = (
+        "/home/kiwoos/venvs/aic-deploy/bin/python -u "
+        "/home/kiwoos/ws_aic/install/lib/aic_model/aic_model"
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -252,9 +263,13 @@ class SimRunner:
         completion_re = "|".join(m.replace("!", r"\!") for m in COMPLETION_MARKERS)
         ready_re = "|".join(READY_MARKERS)
         return f"""#!/bin/bash
-set -u
+# ROS/ament ``setup.bash`` reference unbound shell vars (e.g.
+# AMENT_TRACE_SETUP_FILES); under ``set -u`` a non-interactive bash would exit
+# at the first ``source`` before the sim ever launches. Enable nounset only
+# after the environment is sourced (mirrors ``collect_one.sh``, which omits it).
 source {env.ros_setup}
 source {env.ws_setup}
+set -u
 export RMW_IMPLEMENTATION={env.rmw_implementation}
 export GZ_RENDERING_PLUGIN_PATH={env.gz_rendering_plugin_path}
 export __EGL_VENDOR_LIBRARY_FILENAMES={env.egl_vendor_library_filenames}
@@ -263,9 +278,25 @@ export AIC_RESULTS_DIR={results_dir}
 mkdir -p "{results_dir}"
 
 cleanup() {{
+  # Protect this script's ancestor chain (the eval harness python and any
+  # wrapper/launcher shells above it). Their argv can contain the aic_model
+  # launcher path via --policy-cmd, so the grep below would otherwise match and
+  # kill -9 the harness. The policy node is a *child* of this script, not an
+  # ancestor, so it is still torn down between trials.
+  KEEP=" "
+  ANC=$$
+  while [ "${{ANC:-0}}" -gt 1 ]; do
+    KEEP="$KEEP$ANC "
+    ANC=$(awk '{{print $4}}' /proc/$ANC/stat 2>/dev/null)
+  done
   PIDS=$(ps aux | grep -E "gz sim|aic_model|aic_engine|component_container|rmw_zenohd" \
     | grep -v grep | awk '{{print $2}}')
-  [ -n "$PIDS" ] && kill -9 $PIDS 2>/dev/null || true
+  for pid in $PIDS; do
+    case "$KEEP" in
+      *" $pid "*) ;;
+      *) kill -9 "$pid" 2>/dev/null || true ;;
+    esac
+  done
   sleep 4
 }}
 trap cleanup EXIT
@@ -284,7 +315,7 @@ for i in $(seq 1 45); do
   if grep -qE "{ready_re}" "{log_path}" 2>/dev/null; then break; fi
 done
 
-ros2 run aic_model aic_model --ros-args -p use_sim_time:=true \
+{env.policy_launch_cmd} --ros-args -p use_sim_time:=true \
   -p policy:={policy} >> "{log_path}" 2>&1 &
 
 for i in $(seq 1 {int(self.timeout_s // 5)}); do
@@ -318,10 +349,18 @@ sleep 4
         timed_out = False
         error: str | None = None
         try:
+            # start_new_session=True puts the bringup (and the whole sim process
+            # tree it launches) in its own session/process group. At trial
+            # completion the engine shuts the model node down and ``ros2 launch``
+            # signals its *process group*; without this isolation that group is
+            # the harness's own group, so the shutdown signal would kill the
+            # harness mid-run (observed: harness dies at insert-return with no
+            # traceback). Isolating the session confines that signal to the sim.
             subprocess.run(
                 ["bash", str(script_path)],
                 timeout=self.timeout_s + 120.0,
                 check=False,
+                start_new_session=True,
             )
         except subprocess.TimeoutExpired:
             timed_out = True
@@ -512,15 +551,19 @@ def run_suite(
 ) -> list[TrialResult]:
     """Run every suite member and return per-config result rows.
 
-    Sets ``AIC_CHECKPOINT`` in the environment so the policy class can load its
-    weights (the runtime agent's policy is expected to read that variable); the
-    exact delivery mechanism is centralised here and easy to change.
+    Exports the checkpoint path into the environment so the policy class can load
+    its weights; the delivery mechanism is centralised here and easy to change.
+    Two variable names are set for compatibility: ``AIC_CKPT`` (read by
+    ``aic_example_policies.ros.DeployACT``) and the generic ``AIC_CHECKPOINT``.
+    Child processes (the bringup bash script and the policy node it launches)
+    inherit these via the environment.
 
     Args:
         suite_dir: Directory containing ``manifest.csv`` and ``configs/``.
         out_dir: Destination for per-trial artifacts and result rows.
         policy: ROS ``policy`` parameter value (``module.Class``).
-        checkpoint: Optional checkpoint path exported as ``AIC_CHECKPOINT``.
+        checkpoint: Optional checkpoint path exported as ``AIC_CKPT`` and
+            ``AIC_CHECKPOINT``.
         runner: Sim-interaction object with ``run_trial(...)``; defaults to
             :class:`SimRunner` (or :class:`DryRunSimRunner` when ``dry_run``).
         dry_run: If True, use the fabricating runner (no sim).
@@ -543,6 +586,7 @@ def run_suite(
     if runner is None:
         runner = DryRunSimRunner() if dry_run else SimRunner(env=env, timeout_s=timeout_s)
     if checkpoint is not None:
+        os.environ["AIC_CKPT"] = str(checkpoint)
         os.environ["AIC_CHECKPOINT"] = str(checkpoint)
 
     results: list[TrialResult] = []

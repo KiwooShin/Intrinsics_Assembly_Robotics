@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import io
 import math
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -442,6 +443,85 @@ class TestCliSmoke(unittest.TestCase):
             )
             self.assertEqual(rc, 0)
             self.assertTrue((Path(tmp) / "res" / "report.md").is_file())
+
+
+class TestPolicyLaunchWiring(unittest.TestCase):
+    """Policy-interpreter override and checkpoint env-var delivery.
+
+    These exercise pure string/env logic only (no ROS/Gazebo/GPU): the bringup
+    script is built and inspected, and the checkpoint env export path is driven
+    through the dry-run runner.
+    """
+
+    def test_default_launch_cmd(self) -> None:
+        self.assertEqual(
+            runner.SimEnv().policy_launch_cmd,
+            "/home/kiwoos/venvs/aic-deploy/bin/python -u "
+            "/home/kiwoos/ws_aic/install/lib/aic_model/aic_model",
+        )
+
+    def test_bringup_uses_override_interpreter(self) -> None:
+        custom = "/home/kiwoos/venvs/aic-deploy/bin/python /ws/aic_model"
+        sim = runner.SimRunner(env=runner.SimEnv(policy_launch_cmd=custom))
+        script = sim._bringup_script(
+            Path("/c/cfg.yaml"), "pkg.Cls", Path("/r"), Path("/r/run.log")
+        )
+        self.assertIn(f"{custom} --ros-args", script)
+        self.assertNotIn("ros2 run aic_model aic_model --ros-args", script)
+        self.assertIn("-p policy:=pkg.Cls", script)
+
+    def test_bringup_default_uses_ros2_run(self) -> None:
+        sim = runner.SimRunner()
+        script = sim._bringup_script(
+            Path("/c/cfg.yaml"), "pkg.Cls", Path("/r"), Path("/r/run.log")
+        )
+        self.assertIn("/home/kiwoos/venvs/aic-deploy/bin/python -u", script)
+
+    def test_bringup_enables_nounset_after_sourcing(self) -> None:
+        # `set -u` must come AFTER sourcing ROS/ws setup.bash: those scripts
+        # reference unbound vars and would abort a nounset shell before launch.
+        sim = runner.SimRunner()
+        script = sim._bringup_script(
+            Path("/c/cfg.yaml"), "pkg.Cls", Path("/r"), Path("/r/run.log")
+        )
+        src_idx = script.index(f"source {runner.SimEnv().ros_setup}")
+        nounset_idx = script.index("\nset -u")
+        self.assertLess(src_idx, nounset_idx)
+
+    def test_bringup_cleanup_excludes_harness_ancestors(self) -> None:
+        # cleanup() greps for "aic_model" to kill the policy node; the harness
+        # (and any wrapper shell above it) also carries that path in argv via
+        # --policy-cmd, so cleanup must protect the whole ancestor chain of the
+        # bringup script or it would kill -9 the harness itself.
+        sim = runner.SimRunner()
+        script = sim._bringup_script(
+            Path("/c/cfg.yaml"), "pkg.Cls", Path("/r"), Path("/r/run.log")
+        )
+        self.assertIn("ANC=$$", script)
+        self.assertIn("/proc/$ANC/stat", script)
+        self.assertIn('case "$KEEP" in', script)
+
+    @unittest.skipUnless(EVAL_CONFIG.is_file(), "eval_config.yaml not present")
+    def test_run_suite_exports_checkpoint_env(self) -> None:
+        saved = {k: os.environ.get(k) for k in ("AIC_CKPT", "AIC_CHECKPOINT")}
+        for k in saved:
+            os.environ.pop(k, None)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                suite.write_suite(root / "suite", n=8, seed=7)
+                runner.run_suite(
+                    root / "suite", root / "res", policy="X.Y",
+                    checkpoint="/tmp/fake_ckpt.pt", dry_run=True, limit=2,
+                )
+                self.assertEqual(os.environ["AIC_CKPT"], "/tmp/fake_ckpt.pt")
+                self.assertEqual(os.environ["AIC_CHECKPOINT"], "/tmp/fake_ckpt.pt")
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
 
 if __name__ == "__main__":

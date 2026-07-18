@@ -5,6 +5,20 @@ Latest demo video: `demo/` (none yet — pipeline video pending first milestone)
 
 ---
 
+## 2026-07-17 19:50 — Phase-0 collection COMPLETE: 39/40 KEEPs, 55 episodes total
+
+The Phase-0 campaign finished with a 97.5% keep-rate (39 KEEPs, oracle scores
+92.6–94.0, one config-specific drop) — the dataset is now 55 episodes (39
+Phase-0 stratified with wrench/joints + 16 legacy), 3.4× this morning's size.
+SC-VAL agent now owns the sim to validate the CheatCode SC-entrance-frame fix
+(gates trial 3's ~100 pts; SC collection follows if ≥85); GPU stays idle until
+sim work completes per the RTF-contention rule. Then: retrain (shift-aug, both
+Ks) → paired suite eval of all 6 checkpoints → analysis + policy video +
+dashboard refresh.
+
+**Next 2 h:** SC validation verdict + SC collection or SFP-only fallback;
+retrain launch; first suite scores of the new-data models.
+
 ## 2026-07-17 17:15 — ▶ RESUMED for a 48 h autonomous run (until ~2026-07-19 17:00)
 
 Environment verified identical to the pause state (GPU idle, data intact:

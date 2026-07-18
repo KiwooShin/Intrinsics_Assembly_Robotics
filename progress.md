@@ -5,6 +5,20 @@ Latest demo video: `demo/` (none yet — pipeline video pending first milestone)
 
 ---
 
+## 2026-07-17 17:15 — ▶ RESUMED for a 48 h autonomous run (until ~2026-07-19 17:00)
+
+Environment verified identical to the pause state (GPU idle, data intact:
+22 KEEPs + 16 legacy episodes, repo clean at 8380d2c) and the Phase-0
+campaign is relaunched — resumability worked, ~18 demos remain (~2 h). Plan
+unchanged from the runbook: at CAMPAIGNDONE run CheatCode SC validation
+(15 min, gates trial 3's ~100 pts) then the retrain (shift-aug, both Ks),
+then the paired suite evaluation of all checkpoints + analysis + policy
+video + dashboard refresh.
+
+**Next 2 h:** finish the campaign to 40 demos; prep retrain/SC-validation
+launches. Standing user items: Phase-1 deadline (portal check) and the
+193 GB stale-bag deletion approval.
+
 ## 2026-07-12 20:40 — ⏸ PAUSED by user (GPU needed for another project)
 
 Paused mid-campaign at **22/40 Phase-0 KEEPs** (plus 16 legacy episodes = 38

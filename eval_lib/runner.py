@@ -26,14 +26,47 @@ from .suite import SuiteMember, read_manifest
 
 logger = logging.getLogger(__name__)
 
-# Engine log markers (aic_engine/src/aic_engine.cpp).
+# Engine log markers (aic_engine/src/aic_engine.cpp). A trial reaches a terminal
+# state on *any* of these lines, not only the success one:
+#   - success banner (Engine::run_trials, "... completed successfully! Score:")
+#   - per-trial scoring line, printed on BOTH the success and the
+#     task-timeout/failure paths (Engine::score_trial,
+#     "Finished scoring trial, total score is:")
+#   - failure banner, printed after a failed/timed-out trial
+#     (Engine::run_trials, "... failed or was not completed. Score:")
+# Matching only the success marker made the runner wait out its whole timeout on
+# any trial that did not insert, then kill the engine *before* it wrote
+# scoring.yaml -> the trial was auto-scored 0 ("no scoring").
 COMPLETION_MARKERS = (
     "completed successfully! Score:",
     "Finished scoring trial, total score is:",
+    "failed or was not completed. Score:",
 )
 READY_MARKERS = ("No node with name", "Starting trial 'trial_1'")
 
-DEFAULT_TRIAL_TIMEOUT_S = 600.0  # 10 minutes; a trial's time_limit is 180 s
+# The engine prints a terminal marker (above) from handle_trial, then tears the
+# model node down and only afterwards writes scoring.yaml (Engine::score_run).
+# Once a marker is seen, wait up to this many wall-seconds for the file to
+# appear before tearing the sim down, so a just-completed trial is never killed
+# mid-score.
+SCORING_WAIT_S = 120.0
+
+# Per-trial completion timeout (wall seconds).
+#
+# The engine's task ``time_limit`` (180 s in the eval configs) is measured in
+# SIMULATED time: ``wait_for_interruptible`` polls ``node_->now()`` and the
+# engine node runs with ``use_sim_time:=true`` (aic_gz_bringup.launch.py). A
+# trial that never inserts only reaches that limit -- and only then cancels the
+# task, scores it, and writes scoring.yaml -- after 180 s of *sim* time. At the
+# real-time factor observed while the learned policy runs inference
+# (RTF ~= 0.05, i.e. sim ~20x slower than wall; measured from run.log ``t=``
+# sim-clock stamps vs wall-clock log-line headers), 180 sim-s is ~3600 wall-s,
+# plus sim bring-up (~2-3 min) and scoring/teardown (~2-3 min). The previous
+# 600 s (10 min) timeout fired at ~30 sim-s, killing every slow/failed trial
+# long before it could be scored. Size the default to comfortably exceed the
+# worst case at a conservative RTF ~= 0.045 (180 / 0.045 ~= 4000 wall-s +
+# overhead).
+DEFAULT_TRIAL_TIMEOUT_S = 5400.0  # 90 minutes
 
 
 @dataclasses.dataclass(frozen=True)
@@ -262,6 +295,8 @@ class SimRunner:
         env = self.env
         completion_re = "|".join(m.replace("!", r"\!") for m in COMPLETION_MARKERS)
         ready_re = "|".join(READY_MARKERS)
+        scoring_yaml = results_dir / "scoring.yaml"
+        scoring_wait_iters = int(SCORING_WAIT_S // 2)
         return f"""#!/bin/bash
 # ROS/ament ``setup.bash`` reference unbound shell vars (e.g.
 # AMENT_TRACE_SETUP_FILES); under ``set -u`` a non-interactive bash would exit
@@ -318,9 +353,21 @@ done
 {env.policy_launch_cmd} --ros-args -p use_sim_time:=true \
   -p policy:={policy} >> "{log_path}" 2>&1 &
 
+# Poll for a terminal engine marker (success OR failure/timeout) or for the
+# scoring.yaml artifact itself, whichever comes first. Matching only the success
+# marker previously let this loop run to its full timeout on any trial that did
+# not insert, killing the engine before it scored.
 for i in $(seq 1 {int(self.timeout_s // 5)}); do
   sleep 5
+  if [ -f "{scoring_yaml}" ]; then break; fi
   if grep -qE "{completion_re}" "{log_path}" 2>/dev/null; then break; fi
+done
+# A terminal marker precedes the scoring.yaml write (the engine cleans up and
+# shuts the model node down in between), so wait bounded for the file before the
+# teardown below so a just-completed trial is not killed mid-score.
+for i in $(seq 1 {scoring_wait_iters}); do
+  if [ -f "{scoring_yaml}" ]; then break; fi
+  sleep 2
 done
 sleep 4
 """

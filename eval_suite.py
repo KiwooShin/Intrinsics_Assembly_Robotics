@@ -78,6 +78,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         Process exit code (0 on success).
     """
     name = args.name or Path(args.out).name
+    env = (
+        runner.SimEnv(policy_launch_cmd=args.policy_cmd)
+        if args.policy_cmd is not None
+        else None
+    )
     results = runner.run_suite(
         suite_dir=args.suite,
         out_dir=args.out,
@@ -85,6 +90,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         checkpoint=args.checkpoint,
         dry_run=args.dry_run,
         limit=args.limit,
+        env=env,
         timeout_s=args.timeout,
     )
     agg = report.write_report(args.out, results, name=name, seed=args.seed)
@@ -142,6 +148,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--out", required=True, help="results output directory")
     p_run.add_argument("--policy", default="aic_example_policies.ros.CheatCode",
                        help="ROS policy param value (module.Class)")
+    p_run.add_argument("--policy-cmd", default=None,
+                       help="override the policy launch command (before --ros-args); "
+                            "e.g. '/home/kiwoos/venvs/aic-deploy/bin/python "
+                            "/home/kiwoos/ws_aic/install/lib/aic_model/aic_model' to run "
+                            "a torch policy under the deploy venv interpreter")
     p_run.add_argument("--checkpoint", default=None,
                        help="checkpoint path exported as AIC_CHECKPOINT")
     p_run.add_argument("--name", default=None, help="run name for the report")

@@ -501,6 +501,18 @@ class TestPolicyLaunchWiring(unittest.TestCase):
         self.assertIn("/proc/$ANC/stat", script)
         self.assertIn('case "$KEEP" in', script)
 
+    def test_bringup_detects_failure_marker_and_waits_for_scoring(self) -> None:
+        # The poll loop must (a) match the failure/timeout terminal line, not
+        # only the success one, and (b) break on / wait for scoring.yaml so a
+        # failed-but-scored trial is not torn down before the engine writes it.
+        sim = runner.SimRunner()
+        results_dir = Path("/r")
+        script = sim._bringup_script(
+            Path("/c/cfg.yaml"), "pkg.Cls", results_dir, results_dir / "run.log"
+        )
+        self.assertIn("failed or was not completed. Score:", script)
+        self.assertIn(f'[ -f "{results_dir / "scoring.yaml"}" ]', script)
+
     @unittest.skipUnless(EVAL_CONFIG.is_file(), "eval_config.yaml not present")
     def test_run_suite_exports_checkpoint_env(self) -> None:
         saved = {k: os.environ.get(k) for k in ("AIC_CKPT", "AIC_CHECKPOINT")}
@@ -522,6 +534,79 @@ class TestPolicyLaunchWiring(unittest.TestCase):
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
+
+
+class TestCompletionDetection(unittest.TestCase):
+    """Terminal-marker detection over synthetic engine logs (no ROS/sim).
+
+    Regression guard for the "no scoring.yaml" bug: a failed/timed-out trial
+    prints a *different* terminal line than a success. If the runner matched
+    only the success marker it waited out its whole timeout and killed the
+    engine before it wrote scoring.yaml, auto-scoring the trial 0.
+    """
+
+    # Terminal engine lines; the load-bearing substrings are verbatim from
+    # aic_engine/src/aic_engine.cpp (surrounding ANSI/format text simulated).
+    _SUCCESS_LINE = (
+        "[aic_engine-8] [INFO] [1784393600.1] [aic_engine]: "
+        "✓ Trial 'trial_1' completed successfully! Score: 96.000000"
+    )
+    _SCORING_LINE = (
+        "[aic_engine-8] [INFO] [1784393600.2] [aic_engine]: "
+        "Finished scoring trial, total score is: 0.000000"
+    )
+    _FAILURE_LINE = (
+        "[aic_engine-8] [WARN] [1784393600.3] [aic_engine]: "
+        "⚠ Trial 'trial_1' failed or was not completed. Score: 0.000000. "
+        "Continuing to next trial..."
+    )
+    _MID_TRIAL_BODY = (
+        "[INFO] [1784394795.0] [aic_model]: t=27.9s pred|lin|=0.0045 m/s\n"
+        "[INFO] [1784394796.2] [aic_model]: insert_cable execute loop"
+    )
+
+    def _write_log(self, tmp: str, body: str) -> Path:
+        p = Path(tmp) / "run.log"
+        p.write_text(body + "\n")
+        return p
+
+    def test_failure_marker_is_registered(self) -> None:
+        self.assertIn(
+            "failed or was not completed. Score:", runner.COMPLETION_MARKERS
+        )
+
+    def test_failure_line_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = self._write_log(tmp, self._FAILURE_LINE)
+            self.assertTrue(runner._log_has_completion(log))
+
+    def test_success_and_scoring_lines_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertTrue(
+                runner._log_has_completion(self._write_log(tmp, self._SUCCESS_LINE))
+            )
+            self.assertTrue(
+                runner._log_has_completion(self._write_log(tmp, self._SCORING_LINE))
+            )
+
+    def test_mid_trial_not_detected(self) -> None:
+        # A trial still executing (no terminal line) must NOT read as complete.
+        with tempfile.TemporaryDirectory() as tmp:
+            log = self._write_log(tmp, self._MID_TRIAL_BODY)
+            self.assertFalse(runner._log_has_completion(log))
+
+    def test_missing_log_not_detected(self) -> None:
+        self.assertFalse(runner._log_has_completion(Path("/no/such/run.log")))
+
+    def test_timeout_exceeds_worst_case_at_observed_rtf(self) -> None:
+        # 180 sim-s time_limit at the observed RTF ~= 0.05 is ~3600 wall-s; the
+        # default timeout must comfortably exceed that plus bring-up/teardown.
+        observed_rtf = 0.05
+        sim_time_limit_s = 180.0
+        worst_case_insertion_wall_s = sim_time_limit_s / observed_rtf  # 3600
+        self.assertGreaterEqual(
+            runner.DEFAULT_TRIAL_TIMEOUT_S, worst_case_insertion_wall_s + 600.0
+        )
 
 
 if __name__ == "__main__":

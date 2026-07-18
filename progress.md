@@ -5,6 +5,22 @@ Latest demo video: `demo/` (none yet — pipeline video pending first milestone)
 
 ---
 
+## 2026-07-18 10:50 — Harness hardened after cascade postmortem; scoring bug hunt
+
+Three harness defects were found and fixed this morning: the agent-waiter
+stall pattern (banned; detached scripts mandated), a torch-less policy
+launcher that zeroed every trial (venv pinned in runner + batch, tests
+updated), and a two-batch collision where an overly-broad cleanup pkill
+fratricided the sibling (flock single-instance lock + narrowed pattern,
+verified live). p1_k8 is confirmed HEALTHY offline — its 0/100 was artifact.
+Now chasing the last validity bug: policy trials that fail to insert
+frequently end with NO scoring.yaml (engine torn down pre-scoring; suspected
+success-only completion regex in the runner) — SCORE-FIX agent verifying and
+patching while the locked batch grinds v2_wide (3/15).
+
+**Next 2 h:** SCORE-FIX verdict → likely batch restart with fixed runner →
+finally-valid paired scores for v2_wide/p1_k8/p1_k16.
+
 ## 2026-07-18 08:50 — Overnight stall root-caused; self-driving eval batch launched
 
 The suite evaluation stalled after run 1 of 3 (~01:23): the eval agent parked

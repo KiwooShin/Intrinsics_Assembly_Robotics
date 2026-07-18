@@ -340,17 +340,15 @@ cleanup
 ros2 run rmw_zenoh_cpp rmw_zenohd > /dev/null 2>&1 &
 sleep {env.zenoh_startup_s}
 
-# gazebo_gui:=false suppresses the `gz sim -g` rendering GUI client. On this
-# headless eval box the GUI renders the scene over VNC (:2) for no benefit and
-# competes with the gzserver's own offscreen camera rendering for the GPU/CPU
-# (observed: the `gz sim -g` process pinned ~150% CPU during trials). Dropping it
-# is the single largest safe real-time-factor win and changes nothing the policy
-# observes (camera resolution/FOV/update_rate untouched). launch_rviz is already
-# false; this closes the other renderer.
+# NOTE(2026-07-18): gazebo_gui:=false was tried here to save the ~150%-CPU GUI
+# renderer, but the very first headless trial wedged hard at t=16 sim-s: the
+# whole stack froze with the policy blocked in get_observation — the offscreen
+# camera rendering appears to depend on the GL/EGL context the GUI client keeps
+# alive on the VNC display. Reverted: the GUI stays. The 60-sim-s fast suite is
+# the reliable wall-clock win instead.
 ros2 launch aic_bringup aic_gz_bringup.launch.py \
   aic_engine_config_file:={config_path} \
   ground_truth:=true start_aic_engine:=true launch_rviz:=false \
-  gazebo_gui:=false \
   > "{log_path}" 2>&1 &
 
 for i in $(seq 1 45); do

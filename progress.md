@@ -5,6 +5,20 @@ Latest demo video: `demo/` (none yet — pipeline video pending first milestone)
 
 ---
 
+## 2026-07-17 21:45 — SC oracle fixed (19→94) + SC data collected; retrain launched
+
+The CheatCode SC fix validated at 94.1–94.3 with zero contacts on both test
+configs including official trial_3 (one floor tune to −0.005, committed) —
+trial 3's ~100 pts are now reachable — and the SC collection pass kept 5/8
+demos (3 drops: 59.0 sub-threshold + two ~65 partials; floor micro-tune noted
+as future work). Dataset finalized at **60 episodes** (39 SFP + 5 SC Phase-0
+with wrench/joints, 16 legacy); RETRAIN-P1 agent now owns the GPU training
+p1_k8 (shift8) and p1_k16 (shift4) per the W1 winners.
+
+**Next 2 h:** retrain completes → paired suite smoke eval of all 6 checkpoints
+(first-ever SC-capable models) → analysis agent + policy rollout video +
+dashboard refresh → overnight failure-driven Phase-2 collection.
+
 ## 2026-07-17 19:50 — Phase-0 collection COMPLETE: 39/40 KEEPs, 55 episodes total
 
 The Phase-0 campaign finished with a 97.5% keep-rate (39 KEEPs, oracle scores

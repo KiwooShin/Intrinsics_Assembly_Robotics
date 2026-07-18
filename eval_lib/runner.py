@@ -14,6 +14,7 @@ import hashlib
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -25,6 +26,65 @@ from . import scoring
 from .suite import SuiteMember, read_manifest
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Concurrency invariant (WEDGE-DEBUG 2026-07-18 fratricide post-mortem)
+# ---------------------------------------------------------------------------
+# This harness is SEQUENTIAL-ONLY. Exactly one trial may touch the simulator at
+# a time; that invariant is enforced by the flock in ``eval_batch.sh``. Every
+# trial currently shares a single *global* ROS graph (one ``ROS_DOMAIN_ID``)
+# and one Gazebo/zenoh transport, so two concurrent trials would cross-talk on
+# ``/tf`` and cross-kill on teardown. That was the original "fratricide": a
+# name-based global ``pkill`` / ``ps aux | grep ... | kill -9`` reaped *peer*
+# trials' processes and flooded ``/tf`` with "extrapolation into the past".
+#
+# Teardown is now PROCESS-GROUP SCOPED, never name-based:
+#   * ``run_trial`` launches each bringup with ``start_new_session=True`` so the
+#     bringup (and the whole sim tree it spawns) forms its own process group.
+#   * ``_reap`` sends ``SIGKILL`` to exactly that group on EVERY exit path
+#     (success, timeout, exception) via :func:`os.killpg`.
+#   * the bringup script's own ``EXIT`` trap kills only ``-$$`` (its own group).
+# Nothing here can match or signal a sibling trial's processes.
+#
+# FUTURE HARDENING for real concurrency (do NOT lift the flock without it):
+# give each trial an isolated transport -- a per-trial ``ROS_DOMAIN_ID``
+# (0..101) and a per-trial ``GZ_PARTITION`` (plus a matching zenoh router
+# config) exported into ``_bringup_script``'s environment -- so parallel trials
+# cannot observe or signal each other's nodes. Process-group reaping already
+# makes per-trial teardown safe; transport isolation is the remaining piece.
+# ---------------------------------------------------------------------------
+
+# Wall-clock grace added on top of the per-trial completion timeout before the
+# harness force-kills a trial's whole process group. The bringup script's own
+# poll loop should terminate the trial first; this hard bound only fires if the
+# script itself wedges. Referenced as a module global so tests can shrink it.
+HARD_TIMEOUT_MARGIN_S = 120.0
+
+
+def _reap(proc: subprocess.Popen[bytes]) -> None:
+    """Send ``SIGKILL`` to a bringup subprocess's entire process group.
+
+    The bringup script runs with ``start_new_session=True``, so it leads its own
+    process group and every sim/ROS node it spawns -- ``rmw_zenohd``, ``ros2
+    launch`` and its ``aic_adapter`` / ``static_transform_publisher`` / relay /
+    ``gz sim`` / ``aic_engine`` / ``component_container`` descendants, and the
+    policy node -- shares that group id. Killing the group in one
+    :func:`os.killpg` call reaps the trial atomically, so no orphaned bringup
+    session lingers as a cross-trial "kill grenade" whose ``EXIT`` trap detonates
+    on a peer trial later (WEDGE-DEBUG 2026-07-18).
+
+    Idempotent: a group that is already gone raises ``ProcessLookupError``, which
+    is swallowed. Safe to call on every exit path.
+
+    Args:
+        proc: The bringup subprocess (a process-group leader from
+            ``Popen(..., start_new_session=True)``).
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except ProcessLookupError:
+        # The leader (and thus its group) is already gone; nothing to reap.
+        pass
 
 # Engine log markers (aic_engine/src/aic_engine.cpp). A trial reaches a terminal
 # state on *any* of these lines, not only the success one:
@@ -312,32 +372,30 @@ export DISPLAY={env.display}
 export AIC_RESULTS_DIR={results_dir}
 mkdir -p "{results_dir}"
 
+# Process-group-scoped teardown (WEDGE-DEBUG 2026-07-18 fratricide fix).
+# runner.py launches this script with start_new_session=True, so `-$$` is
+# exactly this trial's own process group. There is deliberately NO name-based
+# global process matching (no ps/grep/kill by node name): that reaped PEER
+# trials sharing the one global ROS/gz graph and leaked orphans that flooded /tf.
+ZENOH_PID=""
+LAUNCH_PID=""
+POLICY_PID=""
 cleanup() {{
-  # Protect this script's ancestor chain (the eval harness python and any
-  # wrapper/launcher shells above it). Their argv can contain the aic_model
-  # launcher path via --policy-cmd, so the grep below would otherwise match and
-  # kill -9 the harness. The policy node is a *child* of this script, not an
-  # ancestor, so it is still torn down between trials.
-  KEEP=" "
-  ANC=$$
-  while [ "${{ANC:-0}}" -gt 1 ]; do
-    KEEP="$KEEP$ANC "
-    ANC=$(awk '{{print $4}}' /proc/$ANC/stat 2>/dev/null)
+  # Kill ONLY this trial's own children by recorded PID, then its own process
+  # group as a catch-all for reparented descendants (aic_adapter,
+  # static_transform_publisher, relay, gz sim, aic_engine, component_container).
+  for pid in "$POLICY_PID" "$LAUNCH_PID" "$ZENOH_PID"; do
+    [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
   done
-  PIDS=$(ps aux | grep -E "gz sim|aic_model|aic_engine|component_container|rmw_zenohd" \
-    | grep -v grep | awk '{{print $2}}')
-  for pid in $PIDS; do
-    case "$KEEP" in
-      *" $pid "*) ;;
-      *) kill -9 "$pid" 2>/dev/null || true ;;
-    esac
-  done
-  sleep 4
+  sleep 2
+  # LAST statement: signalling this script's own process group also kills the
+  # shell running cleanup, so nothing may follow it.
+  kill -9 -- "-$$" 2>/dev/null || true
 }}
 trap cleanup EXIT
-cleanup
 
 ros2 run rmw_zenoh_cpp rmw_zenohd > /dev/null 2>&1 &
+ZENOH_PID=$!
 sleep {env.zenoh_startup_s}
 
 # NOTE(2026-07-18): gazebo_gui:=false was tried here to save the ~150%-CPU GUI
@@ -350,6 +408,7 @@ ros2 launch aic_bringup aic_gz_bringup.launch.py \
   aic_engine_config_file:={config_path} \
   ground_truth:=true start_aic_engine:=true launch_rviz:=false \
   > "{log_path}" 2>&1 &
+LAUNCH_PID=$!
 
 for i in $(seq 1 45); do
   sleep 2
@@ -358,6 +417,7 @@ done
 
 {env.policy_launch_cmd} --ros-args -p use_sim_time:=true \
   -p policy:={policy} >> "{log_path}" 2>&1 &
+POLICY_PID=$!
 
 # Poll for a terminal engine marker (success OR failure/timeout) or for the
 # scoring.yaml artifact itself, whichever comes first. Matching only the success
@@ -401,23 +461,37 @@ sleep 4
         start = time.monotonic()
         timed_out = False
         error: str | None = None
+        # start_new_session=True puts the bringup (and the whole sim process
+        # tree it launches) in its own session/process group. Two things depend
+        # on it: (1) at trial completion ``ros2 launch`` signals its *process
+        # group* on shutdown -- isolating the session confines that signal to
+        # the sim instead of killing the harness mid-run; (2) it lets ``_reap``
+        # SIGKILL exactly this trial's group (never a peer's) on timeout/error.
+        proc = subprocess.Popen(["bash", str(script_path)], start_new_session=True)
         try:
-            # start_new_session=True puts the bringup (and the whole sim process
-            # tree it launches) in its own session/process group. At trial
-            # completion the engine shuts the model node down and ``ros2 launch``
-            # signals its *process group*; without this isolation that group is
-            # the harness's own group, so the shutdown signal would kill the
-            # harness mid-run (observed: harness dies at insert-return with no
-            # traceback). Isolating the session confines that signal to the sim.
-            subprocess.run(
-                ["bash", str(script_path)],
-                timeout=self.timeout_s + 120.0,
-                check=False,
-                start_new_session=True,
-            )
+            proc.wait(timeout=self.timeout_s + HARD_TIMEOUT_MARGIN_S)
         except subprocess.TimeoutExpired:
             timed_out = True
             error = "sim bringup exceeded hard timeout"
+            _reap(proc)
+        except BaseException:
+            # Any abnormal harness exit (e.g. KeyboardInterrupt): never leave the
+            # sim group orphaned as a cross-trial kill-grenade -- reap, then
+            # propagate.
+            _reap(proc)
+            raise
+        finally:
+            # Success path too: the script's own EXIT trap tears its group down,
+            # but reap once more so no descendant outlives the trial regardless
+            # of exit path, then wait out the (now-dead) leader so it is not left
+            # a zombie.
+            _reap(proc)
+            try:
+                proc.wait(timeout=30.0)
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    "bringup leader pid=%d still alive 30s after reap", proc.pid
+                )
         duration_s = time.monotonic() - start
         completed = _log_has_completion(log_path)
         if not scoring_path.is_file() and not completed:

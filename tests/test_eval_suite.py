@@ -13,7 +13,10 @@ import contextlib
 import io
 import math
 import os
+import signal
+import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -488,18 +491,36 @@ class TestPolicyLaunchWiring(unittest.TestCase):
         nounset_idx = script.index("\nset -u")
         self.assertLess(src_idx, nounset_idx)
 
-    def test_bringup_cleanup_excludes_harness_ancestors(self) -> None:
-        # cleanup() greps for "aic_model" to kill the policy node; the harness
-        # (and any wrapper shell above it) also carries that path in argv via
-        # --policy-cmd, so cleanup must protect the whole ancestor chain of the
-        # bringup script or it would kill -9 the harness itself.
+    def test_bringup_teardown_is_process_group_scoped(self) -> None:
+        # WEDGE-DEBUG 2026-07-18 fratricide fix: teardown must be scoped to this
+        # trial's OWN process group / children, never a global name match.
         sim = runner.SimRunner()
         script = sim._bringup_script(
             Path("/c/cfg.yaml"), "pkg.Cls", Path("/r"), Path("/r/run.log")
         )
-        self.assertIn("ANC=$$", script)
-        self.assertIn("/proc/$ANC/stat", script)
-        self.assertIn('case "$KEEP" in', script)
+        # PID bookkeeping of the trial's own children.
+        self.assertIn("ZENOH_PID=$!", script)
+        self.assertIn("LAUNCH_PID=$!", script)
+        self.assertIn("POLICY_PID=$!", script)
+        # Own-process-group catch-all (start_new_session makes this script the
+        # group leader, so `-$$` is exactly this trial's group).
+        self.assertIn('kill -9 -- "-$$"', script)
+        self.assertIn("trap cleanup EXIT", script)
+
+    def test_bringup_has_no_global_name_kill(self) -> None:
+        # The old cleanup did `ps aux | grep -E "gz sim|aic_model|..." | kill -9`,
+        # which reaped PEER trials sharing the one global ROS/gz graph. There must
+        # be NO global name-based process matching left in the generated script.
+        sim = runner.SimRunner()
+        script = sim._bringup_script(
+            Path("/c/cfg.yaml"), "pkg.Cls", Path("/r"), Path("/r/run.log")
+        )
+        self.assertNotIn("ps aux | grep", script)
+        self.assertNotIn("grep -v grep", script)
+        self.assertNotIn("pkill", script)
+        # The ancestor-protection scaffolding of the old approach is also gone.
+        self.assertNotIn("/proc/$ANC/stat", script)
+        self.assertNotIn("KEEP", script)
 
     def test_bringup_detects_failure_marker_and_waits_for_scoring(self) -> None:
         # The poll loop must (a) match the failure/timeout terminal line, not
@@ -607,6 +628,105 @@ class TestCompletionDetection(unittest.TestCase):
         self.assertGreaterEqual(
             runner.DEFAULT_TRIAL_TIMEOUT_S, worst_case_insertion_wall_s + 600.0
         )
+
+
+class TestProcessGroupReaping(unittest.TestCase):
+    """Process-group reap logic (WEDGE-DEBUG 2026-07-18 fratricide fix).
+
+    Exercises the real ``os.killpg`` teardown with throwaway ``sleep``
+    subprocesses -- no ROS, Gazebo, or GPU. Each spawned bringup stand-in is
+    launched with ``start_new_session=True`` exactly as :class:`runner.SimRunner`
+    does, so ``_reap`` targets one isolated process group.
+    """
+
+    @staticmethod
+    def _pgid_alive(pgid: int) -> bool:
+        """Return whether any process in group ``pgid`` still exists."""
+        try:
+            os.killpg(pgid, 0)  # signal 0: existence check only.
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def test_reap_kills_whole_group(self) -> None:
+        # A leader that spawns two grandchildren: reaping the group must kill all.
+        proc = subprocess.Popen(
+            ["bash", "-c", "sleep 60 & sleep 60 & wait"],
+            start_new_session=True,
+        )
+        pgid = os.getpgid(proc.pid)
+        try:
+            self.assertTrue(self._pgid_alive(pgid))
+            runner._reap(proc)
+            proc.wait(timeout=10)
+            # Give the kernel a beat to tear down the grandchildren.
+            deadline = time.monotonic() + 5.0
+            while self._pgid_alive(pgid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertFalse(self._pgid_alive(pgid))
+        finally:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(pgid, signal.SIGKILL)
+
+    def test_reap_is_idempotent_on_dead_group(self) -> None:
+        # Reaping an already-exited process must not raise (ProcessLookupError
+        # is swallowed) -- _reap runs on the success path too, after the group
+        # is already gone.
+        proc = subprocess.Popen(["bash", "-c", "exit 0"], start_new_session=True)
+        proc.wait(timeout=10)
+        runner._reap(proc)  # must not raise.
+        runner._reap(proc)  # second call also fine.
+
+    def test_run_trial_reaps_on_timeout(self) -> None:
+        # A bringup that never terminates must be force-reaped when the hard
+        # timeout fires, and no spawned child may survive. A unique argv marker
+        # lets us confirm the descendants are gone.
+        marker = f"aic_reap_marker_{os.getpid()}"
+
+        class _WedgedRunner(runner.SimRunner):
+            def _bringup_script(self, config_path, policy, results_dir, log_path):
+                # A child carrying the marker in argv ($0 of a sub-shell), plus
+                # the leader waiting on it -- mimics a wedged sim tree that
+                # outlives its poll loop. The marker lets pgrep confirm the
+                # descendant is reaped with the group.
+                return (
+                    "#!/bin/bash\n"
+                    f"bash -c 'sleep 60' {marker} &\n"
+                    "wait\n"
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            sim = _WedgedRunner(timeout_s=0.0)
+            saved_margin = runner.HARD_TIMEOUT_MARGIN_S
+            runner.HARD_TIMEOUT_MARGIN_S = 0.5  # hard timeout = 0.0 + 0.5s.
+            try:
+                member = suite.SuiteMember(
+                    "cfg_000", "stratified", suite.Stratum(0, "SFP", 0),
+                    0.16, -0.1, 0.1, 0.042, "configs/cfg_000.yaml",
+                )
+                outcome = sim.run_trial(
+                    member, Path("/c/cfg.yaml"), "pkg.Cls", Path(tmp) / "trial"
+                )
+            finally:
+                runner.HARD_TIMEOUT_MARGIN_S = saved_margin
+            self.assertTrue(outcome.timed_out)
+            self.assertIn("hard timeout", outcome.error or "")
+            # The marked descendant must have been reaped with the group.
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                found = subprocess.run(
+                    ["pgrep", "-f", marker], capture_output=True, text=True
+                )
+                if found.returncode != 0:  # pgrep: no match.
+                    break
+                time.sleep(0.1)
+            self.assertNotEqual(
+                subprocess.run(["pgrep", "-f", marker]).returncode,
+                0,
+                "reap left a bringup descendant alive",
+            )
 
 
 if __name__ == "__main__":

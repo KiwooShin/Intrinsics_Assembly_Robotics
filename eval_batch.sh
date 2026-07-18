@@ -23,6 +23,29 @@ if ! flock -n 9; then
   exit 1
 fi
 
+# PREFLIGHT orphan sweep (WEDGE-DEBUG 2026-07-18 fratricide fix). Run ONCE, at
+# batch start, BEFORE the first trial: kill leaked PPID==1 orphans left by a
+# purged sim or a crashed prior batch (aic_adapter, static_transform_publisher,
+# relay, gz sim, aic_engine, rmw_zenohd, aic_model, component_container get
+# reparented to init when their bringup dies). This is NOT a between-run kill:
+# runner.py now reaps each trial's own process group on every exit path, so
+# there is no global pkill between runs (that was the fratricide -- it reaped
+# peer trials). Bracketed patterns keep the matcher from matching itself;
+# PPID==1 plus pid!=$$ guarantees we never touch this batch's own process tree
+# (our live children are never reparented to init).
+preflight_orphan_sweep() {
+  local self=$$
+  local pat='aic_[a]dapter|static_[t]ransform_publisher|[r]elay|gz [s]im|aic_[e]ngine|rmw_[z]enohd|aic_[m]odel|component_[c]ontainer'
+  ps -eo pid=,ppid=,args= 2>/dev/null \
+    | awk -v self="$self" -v pat="$pat" '$2==1 && $1!=self && $0~pat {print $1}' \
+    | while read -r pid; do
+        [ -n "$pid" ] || continue
+        echo "[eval_batch] preflight: killing orphan pid=$pid"
+        kill -9 "$pid" 2>/dev/null || true
+      done
+}
+preflight_orphan_sweep
+
 SUITE="${SUITE:-eval_suite_smoke}"
 POLICY="${POLICY:-aic_example_policies.ros.DeployACT}"
 QUEUE="${QUEUE:-p1_k16:/home/kiwoos/training/ckpt/p1_k16.pt v2_wide:/home/kiwoos/training/ckpt/v2_wide.pt p1_k8:/home/kiwoos/training/ckpt/p1_k8.pt}"
@@ -47,14 +70,9 @@ for pair in $QUEUE; do
     --checkpoint "$ckpt" --out "$out/" --policy-cmd "$POLICY_CMD"
   rc=$?
   echo "==== [eval_batch] EXIT $name rc=$rc $(date '+%F %T') ===="
-  # Belt-and-braces: kill straggler sim procs between runs. Patterns must hit
-  # ONLY the sim/node processes, never our own runner: 'aic_[m]odel' alone also
-  # matches eval_suite.py's --policy-cmd argument (killed a sibling batch once);
-  # '--ros-args' appears only in the launched node's command line.
-  pkill -9 -f 'gz [s]im' 2>/dev/null
-  pkill -9 -f 'aic_[e]ngine' 2>/dev/null
-  pkill -9 -f 'rmw_[z]enohd' 2>/dev/null
-  pkill -9 -f 'aic_[m]odel --ros-args' 2>/dev/null
-  sleep 5
+  # NO between-run kill. runner.py now reaps each trial's own process group on
+  # every exit path (os.killpg on success/timeout/exception), so there are no
+  # stragglers to sweep here. A global pkill between runs is exactly the
+  # fratricide this change removes: it killed peer/sibling batches' processes.
 done
 echo "EVALBATCHDONE $(date '+%F %T')"

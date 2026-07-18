@@ -70,6 +70,17 @@ This also blocks the shipped `RunACT`. Options (user to choose — all touch the
 - Target dataset size / compute budget for the first generalizing model.
 - Priority: breadth (cover SFP+SC, clutter) vs depth (nail SFP trials 1–2 first).
 
+## Experiment — SC oracle validation (2026-07-17 ~20:30, SC-VAL sub-agent)
+
+| Experiment | Verdict | Key metric |
+|---|---|---|
+| SC entrance-frame retarget (floor 0.0) | ⚠️ Partial | p0 config full insertion 94.28; official trial_3 stopped 0.01 m short (65.18) |
+| Floor tune −0.005 | ✅ Success | official trial_3 **94.10 full**, p0 94.07 full; contacts 0, force 0 everywhere |
+| SC oracle overall | ✅ Fixed (19.07 → ~94) | CheatCode now valid for SC; 8-demo SC collection launched |
+
+Phase-0 campaign final: **39/40 KEEPs** (97.5%), scores 92.6–94.0. Dataset:
+39 Phase-0 SFP + 16 legacy + up to 8 SC incoming = ~63 episodes.
+
 ## Experiment — arm unfreeze via position-mode deployment (2026-07-12 ~17:00)
 
 | Experiment | Verdict | Key metric |

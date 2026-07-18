@@ -5,6 +5,22 @@ Latest demo video: `demo/` (none yet — pipeline video pending first milestone)
 
 ---
 
+## 2026-07-18 12:50 — Fratricide solved: the eval "freezes" were peer-kills, not deadlocks
+
+Live forensics on a "frozen" sim proved there was never a hang: trials share
+one global ROS graph, every bringup's cleanup did global name-matched kills,
+and orphaned bringup sessions from earlier incomplete kills detonated their
+EXIT traps into peer trials — one victim had actually COMPLETED and was
+killed during post-score homing; 321 leaked orphan nodes (aic_adapter/tf
+publishers) were burning ~3 cores and corrupting /tf. Fix (committed, 165
+tests): process-group-scoped teardown with zero name matching, reap-on-
+timeout in the runner, one-time preflight orphan sweep, sequential-only
+invariant documented. System purged to zero residuals; the clean 3-ckpt
+batch on the 60-sim-s suite launched 12:12 (p1_k8→v2_wide→p1_k16, ~5-7 h).
+
+**Next 2 h:** batch grinds with per-trial verification; on EVALBATCHDONE the
+paired comparison + analysis + dashboard + demo video finally land.
+
 ## 2026-07-18 10:50 — Harness hardened after cascade postmortem; scoring bug hunt
 
 Three harness defects were found and fixed this morning: the agent-waiter

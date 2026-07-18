@@ -14,6 +14,15 @@
 set -u
 cd "$(dirname "$0")"
 
+# Single-instance lock: two concurrent batches share the sim and fratricide
+# each other's processes (observed 2026-07-18). flock refuses a second start.
+LOCK=/tmp/aic_eval_batch.lock
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  echo "[eval_batch] another instance holds $LOCK — refusing to start"
+  exit 1
+fi
+
 SUITE="${SUITE:-eval_suite_smoke}"
 POLICY="${POLICY:-aic_example_policies.ros.DeployACT}"
 QUEUE="${QUEUE:-p1_k16:/home/kiwoos/training/ckpt/p1_k16.pt v2_wide:/home/kiwoos/training/ckpt/v2_wide.pt p1_k8:/home/kiwoos/training/ckpt/p1_k8.pt}"
@@ -38,11 +47,14 @@ for pair in $QUEUE; do
     --checkpoint "$ckpt" --out "$out/" --policy-cmd "$POLICY_CMD"
   rc=$?
   echo "==== [eval_batch] EXIT $name rc=$rc $(date '+%F %T') ===="
-  # Belt-and-braces: kill any straggler sim procs between runs (bracket-safe).
+  # Belt-and-braces: kill straggler sim procs between runs. Patterns must hit
+  # ONLY the sim/node processes, never our own runner: 'aic_[m]odel' alone also
+  # matches eval_suite.py's --policy-cmd argument (killed a sibling batch once);
+  # '--ros-args' appears only in the launched node's command line.
   pkill -9 -f 'gz [s]im' 2>/dev/null
   pkill -9 -f 'aic_[e]ngine' 2>/dev/null
   pkill -9 -f 'rmw_[z]enohd' 2>/dev/null
-  pkill -9 -f 'aic_[m]odel' 2>/dev/null
+  pkill -9 -f 'aic_[m]odel --ros-args' 2>/dev/null
   sleep 5
 done
 echo "EVALBATCHDONE $(date '+%F %T')"

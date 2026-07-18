@@ -5,6 +5,22 @@ Latest demo video: `demo/` (none yet — pipeline video pending first milestone)
 
 ---
 
+## 2026-07-18 16:40 — Control verdict: P1 NOT regressed; 60-s suite hits an insertion floor
+
+The v2_wide control finished and settled the question: the formal paired
+comparison is a statistical tie (p1_k8 +2.57 mean, 95% CI [−4.54, 9.68]),
+with p1_k8 earning partial credit on all 3 officials (27.8/17.7/29.6, incl.
+the SC config) while v2_wide floored official_1 at 1.0 and took two −23
+collision scores to p1_k8's one — so the P1 retrain did not regress and
+generalizes slightly better. The deeper finding: 0/30 insertions and 9/15
+identical 1.0-vs-1.0 floors mean the 60-sim-s fast protocol discriminates
+approach quality only, not insertion (the last-inch phase needs the full
+180-s budget). p1_k16_60 is at 12/15 with zero harness incidents all day.
+
+**Next 2 h:** EVALBATCHDONE (~17:05) → remaining pairwise compares + analysis
+agent + dashboard republish + policy rollout video → overnight failure-driven
+Phase-2 collection targeting the floored strata (distractors + eval-band yaw).
+
 ## 2026-07-18 14:45 — First valid suite result: p1_k8 0/15 insertions; control mid-run
 
 The clean batch produced its first fully-valid run: p1_k8 on the 60-sim-s

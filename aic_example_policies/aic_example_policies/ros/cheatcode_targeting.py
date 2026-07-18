@@ -44,7 +44,7 @@ SFP_DESCENT_FLOOR_Z = -0.015
 # post-campaign 15-min sim validation shows the plug does not fully seat
 # (insertion_events == 0 / total < 85), lower this toward -0.005 / -0.010. Kept a
 # named constant so tuning is a one-line change and requires no ROS.
-SC_DESCENT_FLOOR_Z = 0.0
+SC_DESCENT_FLOOR_Z = -0.005
 
 
 @dataclasses.dataclass(frozen=True)

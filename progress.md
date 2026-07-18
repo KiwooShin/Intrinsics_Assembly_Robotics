@@ -5,6 +5,20 @@ Latest demo video: `demo/` (none yet — pipeline video pending first milestone)
 
 ---
 
+## 2026-07-18 14:45 — First valid suite result: p1_k8 0/15 insertions; control mid-run
+
+The clean batch produced its first fully-valid run: p1_k8 on the 60-sim-s
+suite scored 0/15 insertions (mean 5.3, IQM 2.9; outcomes 10 miss / 2
+collision / 3 proximity) — but with structure: the 3 official configs earned
+real partial credit (17.7–29.6, including 29.6 on the first-ever SC policy
+trial) while 11/12 stratified configs (distractors + eval-band yaws) floored
+at 1, pointing at OOD strata rather than a dead checkpoint. The v2_wide
+control is mid-run (9/15, ~6 min/trial, every finished trial has
+scoring.yaml, zero harness incidents) and decides regression-vs-difficulty.
+
+**Next 2 h:** v2_wide_60 + p1_k16_60 complete → EVALBATCHDONE (~16:30–18:00)
+→ paired comparison + analysis agent + dashboard republish + policy video.
+
 ## 2026-07-18 12:50 — Fratricide solved: the eval "freezes" were peer-kills, not deadlocks
 
 Live forensics on a "frozen" sim proved there was never a hang: trials share

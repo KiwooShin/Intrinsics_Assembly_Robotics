@@ -1,0 +1,27 @@
+seed: 20260712
+n_stratified: 12
+n_official: 3
+n_total: 15
+continuous_axes:
+  board_x:
+  - 0.15
+  - 0.2
+  board_y:
+  - -0.21
+  - 0.05
+  board_yaw:
+  - -3.141592653589793
+  - 3.141592653589793
+  grasp_z:
+  - 0.04
+  - 0.046
+template: /home/kiwoos/work/Intrinsics_Assembly_Robotics/aic_engine/config/eval_config.yaml
+internal_fast_protocol: time_limit=60
+fast_time_limit_s: 60
+official_time_limit_s: 180
+derived_from: eval_suite_smoke
+n_configs: 15
+protocol_note: 'INTERNAL FAST PROTOCOL: task time_limit shortened from 180s to 60s
+  (sim seconds). Insertions occur well under 30 sim-s, so tier-3 signal is preserved
+  while capping non-inserting stall cost. NOT the official 180s protocol -- for internal
+  comparison only.'

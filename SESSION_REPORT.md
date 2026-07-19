@@ -631,3 +631,40 @@ Caveat: n=1 per config (matched seeds); v2 pattern is 4 wins/1 tie with a
 mechanism-consistent tier_3 signature, but a full-suite confirmation with
 paired-bootstrap CIs is launching now (v2_ens on all 15 `eval_suite_smoke`
 configs @180 s, ~100 min) to make the call CI-backed before the run wraps.
+
+## 2026-07-19 07:05 — ENSEMBLE full-suite confirmation OVERTURNS the ab5 verdict; sim run-variance discovered
+
+**Result (15-config matched-seed suite @180 s, ensembling ON vs the OFF head-to-head rows):**
+paired-bootstrap mean diff **−2.27 [−6.17, +0.62]**, IQM diff −0.25 [−3.39, +0.46]
+— both CIs include 0, point estimates NEGATIVE. 0/15 insertions (ON outcomes:
+miss 10 / collision 2 / proximity 3). Nine configs tie exactly at the +1.0 miss
+floor — ensembling cannot rescue a missed approach, so its only leverage is the
+6 configs that reach the port. There, replication is mixed: official_1 +5.5,
+official_3 +2.1, but official_2 −12.9, cfg_005 −2.5, cfg_009 −2.2, and cfg_011
+flipped miss → NEW −23 collision.
+
+**The more important finding — sim run-to-run variance.** The 5 ab5 configs
+were re-run in this batch with identical config, seed, checkpoint, and
+AIC_ENSEMBLE=1, yet: cfg_005 13.5 → 2.8, official_2 39.7 → 26.7, official_3
+38.7 → 35.4, official_1 30.5 → 30.3. Same-seed 180-s trials vary by **±5–13
+points** (Gazebo physics/ROS timing nondeterminism). The effect size of
+ensembling (~±5) is at or below this noise floor, so the ab5 "5/5 wins/ties"
+was substantially sampling luck. Only official_1's gain replicated cleanly.
+This also retroactively widens the error bars on EVERY single-run per-config
+comparison this session (incl. p2_k8's "2 new collisions" — coin-flips, as
+already suspected) and empirically validates the canonical-metric rule "prefer
+mean of 3 seeds for adoption decisions."
+
+**REVISED VERDICT (supersedes 05:30): default deploy stays plain v2_wide —
+AIC_ENSEMBLE remains an opt-in research flag, not the default.** Under the
+canonical metric protocol (suite IQM + CI) the full-suite result is
+inconclusive-with-negative-point; adoption requires positive evidence.
+The 05:30 ab5-based "adopt ON" call was premature — n=1/config with noise
+larger than the effect.
+
+**Final experiment (launched 06:59): repeat trials for real error bars.** Two
+OFF reps of the 5-config ab5 suite (results/v2_off_r{2,3}_smoke, ~55 min),
+then one more ON rep (v2_ens_r3, ~28 min) → n=3 per config per arm (combining
+existing v2_wide_180 / v2_ens / v2_ens_full rows). Questions: (1) per-config
+run-variance σ; (2) does the officials' ON gain (official_1 replicated +5.5)
+survive n=3 mean±sd? Analysis + wrap on completion (~08:45).

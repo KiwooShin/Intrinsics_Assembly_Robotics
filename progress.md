@@ -7,6 +7,17 @@ layout matching the oracle demo `~/demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`).
 
 ---
 
+## 2026-07-19 07:10 — Full suite OVERTURNS ensembling adoption; sim run-variance ±5–13 pts discovered
+
+The 15-config confirmation came back inconclusive-with-negative-point (mean
+diff −2.27 [−6.17, +0.62], 9 miss-floor ties, cfg_011 miss→−23 collision), and
+re-running identical config+seed trials revealed ±5–13 pt run-to-run sim noise
+— the ab5 "5/5 wins" was mostly sampling luck, so the default deploy reverts to
+plain v2_wide with AIC_ENSEMBLE as an opt-in flag. Next 2 h: 3-rep-per-arm
+repeat experiment on the 5 ab5 configs (2 OFF reps running since 06:59, 1 ON
+rep after, ~08:45 done) for per-config mean±sd and a final officials verdict,
+then final analysis + dashboard + wrap.
+
 ## 2026-07-19 05:35 — ENSEMBLE A/B: v2_wide +3.9 mean (wins/ties 5/5), p2_k8 −15.5 → adopt ON for v2 only
 
 The temporal-ensembling A/B finished 05:18: with AIC_ENSEMBLE=1 the adopted

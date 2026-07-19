@@ -357,23 +357,29 @@
           <th>Policy</th><th>Verdict</th><th class="num">Mean OFF → ON</th><th>Per-config Δ</th><th>Tier signature</th>
         </tr></thead>
         <tbody>
-          <tr><td><b>v2_wide</b> + ensemble</td><td><span class="pill ok">ADOPT for deploy</span></td>
+          <tr><td><b>v2_wide</b> + ensemble · 5-cfg ab5</td><td><span class="pill warn">Preview (+3.9)</span></td>
               <td class="num">20.8 → 24.7 (+3.9)</td>
-              <td class="num">+8.3 · +5.7 · +5.4 · +0.1 · 0 (wins/ties 5/5)</td>
-              <td>gains pure tier_3 approach; tier_2 force/contacts unchanged; no new collisions</td></tr>
-          <tr><td><b>p2_k8</b> + ensemble</td><td><span class="pill bad">Keep OFF</span></td>
+              <td class="num">+8.3 · +5.7 · +5.4 · +0.1 · 0</td>
+              <td>looked like 5/5 wins/ties — later shown to be mostly run-to-run noise</td></tr>
+          <tr><td><b>v2_wide</b> + ensemble · 15-cfg full suite</td><td><span class="pill bad">Keep OFF (default)</span></td>
+              <td class="num">7.75 → 5.48 (−2.27 [−6.2, +0.6])</td>
+              <td class="num">9 miss-floor ties · off1 +5.5 · off2 −12.9 · cfg_011 miss→−23 coll</td>
+              <td>paired-bootstrap CI includes 0, point negative — adoption reverted</td></tr>
+          <tr><td><b>p2_k8</b> + ensemble · 5-cfg ab5</td><td><span class="pill bad">Keep OFF</span></td>
               <td class="num">28.3 → 12.8 (−15.5)</td>
               <td class="num">+20.1 · +1.6 · −10.1 · −24.4 · −64.5</td>
-              <td>2 NEW collisions (1 fixed) — contact coin-flip; K=8 gives only a 2-chunk blend</td></tr>
+              <td>collision coin-flips; K=8 gives only a 2-chunk blend</td></tr>
         </tbody>
       </table></div>
       <div class="banner">
         <span style="font-size:15px;line-height:1">▲</span>
-        <div><b>Mechanism confirmed, attractor nudged not broken (0/10 insertions).</b> With K=16/exec 4,
-          older buffered chunks still command closing velocity where the newest chunk has collapsed to
-          the zero-velocity attractor — every v2_wide gain is tier_3 final-approach with zero new
-          contact events. Default deploy is now <b>v2_wide + AIC_ENSEMBLE=1 (m=0.01)</b>; a 15-config
-          full-suite confirmation with paired-bootstrap CIs is running. n=1/config caveat applies.</div>
+        <div><b>Headline discovery: same-seed 180-s trials vary by ±5–13 pts run-to-run</b> (Gazebo/ROS
+          timing nondeterminism) — at or above the ensembling effect size, so the ab5 preview's "5/5
+          wins" was substantially sampling luck; only official_1's +5.5 replicated. Default deploy
+          stays <b>plain v2_wide</b>; AIC_ENSEMBLE=1 remains an opt-in research flag. Mechanism is
+          still real (tier_3 gains on port-reaching configs, arXiv:2304.13705) but needs n≥3 repeats
+          to resolve — a 3-rep-per-arm experiment on the 5 ab5 configs is running for final error bars.
+          Still 0 insertions anywhere; last-inch DAgger / CVAE / residual RL remain the structural fixes.</div>
       </div>
     </div>
   </section>
@@ -451,10 +457,10 @@
       <tbody>
         <tr>
           <td class="lane">Policy</td>
-          <td><div class="xp-name">Temporal-ensembling A/B · v2_wide + p2_k8 (07-19)</div>
-              <div class="xp-sub">AIC_ENSEMBLE=1 m=0.01 · 5 cfgs @180 s matched seeds · 295 tests green</div></td>
-          <td><span class="pill ok">v2 +3.9 / p2 −15.5</span></td>
-          <td class="num">v2 wins/ties 5/5 (pure tier_3) · p2 2 new collisions · adopt ON for v2 only</td>
+          <td><div class="xp-name">Temporal-ensembling A/B + full-suite confirmation (07-19)</div>
+              <div class="xp-sub">AIC_ENSEMBLE=1 m=0.01 · ab5 preview then 15-cfg @180 s · 295 tests green</div></td>
+          <td><span class="pill bad">Keep OFF</span></td>
+          <td class="num">full suite −2.27 [−6.2, +0.6] · same-seed run noise ±5–13 pts · 3-rep experiment running</td>
         </tr>
         <tr>
           <td class="lane">Eval</td>

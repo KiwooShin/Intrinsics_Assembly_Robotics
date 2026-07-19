@@ -41,7 +41,7 @@ import collections
 import dataclasses
 import enum
 import math
-from typing import Mapping
+from typing import Mapping, Protocol
 
 import numpy as np
 
@@ -59,8 +59,47 @@ DEFAULT_CONTACT_FORCE_THRESHOLD: float = 12.0  # N of baseline-relative |F| spik
 # CheatCode / DeployACT MODE_POSITION gains; base for the optional reduced-Z axis.
 DEFAULT_BASE_STIFFNESS: tuple[float, ...] = (90.0, 90.0, 90.0, 50.0, 50.0, 50.0)
 
+# --- Learned port-bearing (``port_aux``) handoff defaults (design section 4). ---
+# The aux head's TCP->port offset replaces the motion-axis guess at handoff when
+# it is plausible AND consistent; otherwise the controller falls back to the
+# ApproachAxisEstimator (today's behavior). All overridable via AIC_GUARDED_AUX*.
+DEFAULT_AUX_MIN_MAG: float = 0.005  # m; a smaller predicted offset is rejected.
+DEFAULT_AUX_MAX_MAG: float = 0.12  # m; a larger predicted offset is rejected.
+DEFAULT_AUX_CONSISTENCY_STD: float = 0.01  # m; cross-frame target spread ceiling.
+DEFAULT_AUX_TRAVEL_MARGIN: float = 0.02  # m added to |offset| for the travel cap.
+DEFAULT_AUX_BUFFER: int = 6  # recent approach-frame predictions kept for the median.
+DEFAULT_AUX_MIN_SAMPLES: int = 3  # plausible predictions required before a handoff.
+DEFAULT_REAIM_RATE: float = 0.2  # per-cycle axis blend toward a re-queried target.
+
 _QUAT_MIN_NORM: float = 1e-9
 _AXIS_MIN_NORM: float = 1e-9
+
+
+class PortBearingProvider(Protocol):
+    """Structural type for a learned TCP->port bearing source (the aux head).
+
+    Implemented by ``DeployACT`` (which runs the aux head on the live
+    observation); kept behind this protocol so ``guarded_descent`` stays
+    ROS/torch-free and unit-testable. Called once per cycle with the measured TCP
+    pose.
+    """
+
+    def predict(
+        self, position: np.ndarray, quaternion: np.ndarray
+    ) -> tuple[np.ndarray | None, float, bool]:
+        """Return the estimated port target in base_link.
+
+        Args:
+            position: Current TCP position ``(3,)`` in base_link (m).
+            quaternion: Current TCP orientation ``(4,)`` ``[x, y, z, w]``.
+
+        Returns:
+            A tuple ``(target_base, magnitude, ok)`` where ``target_base`` is the
+            ``(3,)`` predicted port point in base_link (or None when unavailable),
+            ``magnitude`` is ``|offset|`` (m), and ``ok`` flags a usable
+            prediction (finite, plausible magnitude).
+        """
+        ...
 
 
 class GuardedPhase(str, enum.Enum):
@@ -349,6 +388,31 @@ class GuardedDescent:
         out[3:] = self.anchor_quaternion
         return out
 
+    def reaim(self, new_axis: np.ndarray, rate: float) -> None:
+        """Rate-limit-blend the descent axis toward a freshly-queried direction.
+
+        Used only when ``reaim`` is enabled: nudges the axis toward ``new_axis``
+        by fraction ``rate`` and renormalizes, leaving the fixed anchor and travel
+        cap untouched so the descent still terminates. A degenerate blend (axes
+        nearly opposed) is ignored to avoid a zero-norm axis.
+
+        Args:
+            new_axis: Fresh unit direction ``(3,)`` toward the re-queried target.
+            rate: Blend fraction in ``[0, 1]`` toward ``new_axis`` this cycle.
+        """
+        a = np.asarray(new_axis, dtype=np.float64).reshape(-1)
+        if a.shape != (3,):
+            raise ValueError(f"new_axis must have shape (3,), got {a.shape}")
+        norm = float(np.linalg.norm(a))
+        if norm < _AXIS_MIN_NORM:
+            return
+        a = a / norm
+        blended = (1.0 - float(rate)) * self.axis + float(rate) * a
+        bnorm = float(np.linalg.norm(blended))
+        if bnorm < _AXIS_MIN_NORM:
+            return
+        self.axis = blended / bnorm
+
     def _force_delta(self, force: np.ndarray | None) -> float:
         """Return ``|F - baseline|`` (N), or 0.0 if the contact guard is inactive.
 
@@ -413,6 +477,23 @@ class GuardedDescentConfig:
         z_stiffness: Optional reduced Z-axis stiffness passed to
             ``set_pose_target``; None keeps the base stiffness on every axis.
         base_stiffness: The 6-D MODE_POSITION stiffness the descent starts from.
+        use_aux_bearing: Use the learned port-bearing provider to aim the descent
+            at handoff (``AIC_GUARDED_AUX=1``); falls back to the motion axis when
+            the prediction is implausible/inconsistent. Off = motion-axis only.
+        aux_min_mag: Minimum plausible predicted offset magnitude (m).
+        aux_max_mag: Maximum plausible predicted offset magnitude (m).
+        aux_consistency_std: Ceiling on the cross-frame spread (m) of the buffered
+            target predictions; a noisier estimate falls back to the motion axis.
+        aux_travel_margin: Metres added to ``|offset|`` for the aux travel cap so
+            the descent reaches the port then stops (design section 4.3).
+        aux_buffer: Number of recent approach-frame predictions kept for the
+            median target (steadier than a single stall-frame query).
+        aux_min_samples: Minimum buffered plausible predictions before the aux
+            target is trusted at handoff.
+        reaim: Re-query the provider each descent cycle and rate-limit-blend the
+            axis toward the fresh target (default off; enable only after the
+            static handoff validates).
+        reaim_rate: Per-cycle blend fraction toward the re-queried axis.
     """
 
     enabled: bool = False
@@ -426,6 +507,15 @@ class GuardedDescentConfig:
     contact_force_threshold: float = DEFAULT_CONTACT_FORCE_THRESHOLD
     z_stiffness: float | None = None
     base_stiffness: tuple[float, ...] = DEFAULT_BASE_STIFFNESS
+    use_aux_bearing: bool = False
+    aux_min_mag: float = DEFAULT_AUX_MIN_MAG
+    aux_max_mag: float = DEFAULT_AUX_MAX_MAG
+    aux_consistency_std: float = DEFAULT_AUX_CONSISTENCY_STD
+    aux_travel_margin: float = DEFAULT_AUX_TRAVEL_MARGIN
+    aux_buffer: int = DEFAULT_AUX_BUFFER
+    aux_min_samples: int = DEFAULT_AUX_MIN_SAMPLES
+    reaim: bool = False
+    reaim_rate: float = DEFAULT_REAIM_RATE
 
     def stiffness(self) -> list[float] | None:
         """Return the descent stiffness list, or None to keep the caller default.
@@ -450,7 +540,10 @@ class GuardedDescentConfig:
         ``AIC_GUARDED_STALL_WINDOW``, ``AIC_GUARDED_MIN_RUNTIME``,
         ``AIC_GUARDED_AXIS_N``, ``AIC_GUARDED_AXIS_MIN_DISP``,
         ``AIC_GUARDED_STEP``, ``AIC_GUARDED_TRAVEL_CAP``, ``AIC_GUARDED_FORCE``,
-        ``AIC_GUARDED_ZSTIFFNESS``.
+        ``AIC_GUARDED_ZSTIFFNESS``. Learned-bearing (``port_aux``) handoff:
+        ``AIC_GUARDED_AUX`` (``"1"`` uses the aux bearing), ``AIC_GUARDED_AUX_MINMAG``,
+        ``AIC_GUARDED_AUX_MAXMAG``, ``AIC_GUARDED_AUX_STD``,
+        ``AIC_GUARDED_AUX_MARGIN``, ``AIC_GUARDED_REAIM`` (``"1"`` re-aims).
 
         Args:
             env: Environment mapping (e.g. ``os.environ``).
@@ -499,6 +592,12 @@ class GuardedDescentConfig:
             travel_cap=_f("AIC_GUARDED_TRAVEL_CAP", DEFAULT_TRAVEL_CAP),
             contact_force_threshold=_f("AIC_GUARDED_FORCE", DEFAULT_CONTACT_FORCE_THRESHOLD),
             z_stiffness=z_stiffness,
+            use_aux_bearing=env.get("AIC_GUARDED_AUX", "0").strip() == "1",
+            aux_min_mag=_f("AIC_GUARDED_AUX_MINMAG", DEFAULT_AUX_MIN_MAG),
+            aux_max_mag=_f("AIC_GUARDED_AUX_MAXMAG", DEFAULT_AUX_MAX_MAG),
+            aux_consistency_std=_f("AIC_GUARDED_AUX_STD", DEFAULT_AUX_CONSISTENCY_STD),
+            aux_travel_margin=_f("AIC_GUARDED_AUX_MARGIN", DEFAULT_AUX_TRAVEL_MARGIN),
+            reaim=env.get("AIC_GUARDED_REAIM", "0").strip() == "1",
         )
 
 
@@ -518,6 +617,9 @@ class GuardedStep:
         force_delta: Latest baseline-relative force magnitude (N).
         contacts: Number of contact back-offs so far.
         triggered_this_cycle: True on the exact cycle the stall handoff occurred.
+        bearing_source: Which bearing aimed the descent -- ``"aux"`` (learned
+            port bearing), ``"motion-axis"`` (ApproachAxisEstimator fallback), or
+            ``""`` while still approaching.
     """
 
     targets: np.ndarray | None
@@ -529,6 +631,7 @@ class GuardedStep:
     force_delta: float
     contacts: int
     triggered_this_cycle: bool
+    bearing_source: str = ""
 
 
 class GuardedDescentController:
@@ -543,7 +646,11 @@ class GuardedDescentController:
     the scripted descent targets.
     """
 
-    def __init__(self, config: GuardedDescentConfig) -> None:
+    def __init__(
+        self,
+        config: GuardedDescentConfig,
+        bearing_provider: PortBearingProvider | None = None,
+    ) -> None:
         """Initialize the controller from a config.
 
         Args:
@@ -551,8 +658,12 @@ class GuardedDescentController:
                 enforced here (``DeployACT`` decides whether to construct the
                 controller at all), but callers normally construct it only when
                 ``config.enabled`` is True.
+            bearing_provider: Optional learned port-bearing source (the aux head).
+                When None -- or when ``config.use_aux_bearing`` is False -- the
+                controller is byte-identical to the motion-axis-only behavior.
         """
         self.config = config
+        self.bearing_provider = bearing_provider
         self.stall = StallDetector(
             speed_threshold=config.speed_threshold,
             stall_window_s=config.stall_window_s,
@@ -569,6 +680,18 @@ class GuardedDescentController:
         self._baseline_sum = np.zeros(3, dtype=np.float64)
         self._baseline_count = 0
         self._axis_unavailable_logged = False
+        self._bearing_source = ""
+        # Rolling buffer of recent plausible aux target predictions (base_link),
+        # median-reduced at handoff for a steadier aim than a single stall-frame
+        # query. Only populated when a provider is wired and use_aux_bearing is on.
+        self._aux_targets: collections.deque[np.ndarray] = collections.deque(
+            maxlen=config.aux_buffer
+        )
+
+    @property
+    def _aux_active(self) -> bool:
+        """Whether the learned port bearing should be consulted at handoff."""
+        return self.bearing_provider is not None and self.config.use_aux_bearing
 
     @property
     def active(self) -> bool:
@@ -650,40 +773,20 @@ class GuardedDescentController:
                 self._baseline_sum += force_vec
                 self._baseline_count += 1
             self.axis_estimator.observe(displacement)
+            # Buffer learned port-bearing predictions during the approach so the
+            # handoff can median a steady target (design section 4.3).
+            if self._aux_active:
+                self._buffer_aux_prediction(pos, quat)
             if self.stall.update(t, speed):
-                axis = self.axis_estimator.estimate()
-                if axis is None:
-                    if not self._axis_unavailable_logged:
-                        self._axis_unavailable_logged = True
-                        logs.append(
-                            f"[guarded] stall detected at t={t:.1f}s but approach axis "
-                            f"could not be estimated ({len(self.axis_estimator)} samples); "
-                            f"staying on the learned path"
-                        )
-                    return self._result(None, tuple(logs), False)
                 baseline = self._baseline()
-                self.descent = GuardedDescent(
-                    axis=axis,
-                    anchor_position=pos,
-                    anchor_quaternion=quat,
-                    baseline_force=baseline,
-                    step_size=self.config.step_size,
-                    travel_cap=self.config.travel_cap,
-                    contact_force_threshold=self.config.contact_force_threshold,
-                )
-                self.phase = GuardedPhase.DESCEND
+                if not self._engage_descent(t, pos, quat, baseline, logs):
+                    return self._result(None, tuple(logs), False)
                 triggered_this_cycle = True
-                baseline_norm = 0.0 if baseline is None else float(np.linalg.norm(baseline))
-                logs.append(
-                    f"[guarded] HANDOFF at t={t:.1f}s: stall detected, engaging guarded "
-                    f"descent. axis=({axis[0]:+.3f},{axis[1]:+.3f},{axis[2]:+.3f}) "
-                    f"anchor=({pos[0]:+.3f},{pos[1]:+.3f},{pos[2]:+.3f}) "
-                    f"baseline|F|={baseline_norm:.2f}N step={self.config.step_size*1e3:.1f}mm "
-                    f"cap={self.config.travel_cap*1e3:.0f}mm force_thr="
-                    f"{self.config.contact_force_threshold:.1f}N"
-                )
             else:
                 return self._result(None, tuple(logs), False)
+        elif self._aux_active and self.config.reaim and self.descent is not None:
+            # Re-aim an in-progress descent toward a freshly-queried target.
+            self._maybe_reaim(pos, quat)
 
         # Descending or holding: advance the state machine and emit targets.
         assert self.descent is not None
@@ -704,6 +807,163 @@ class GuardedDescentController:
             )
         targets = _interpolate_targets(prev_target, new_target, substeps)
         return self._result(targets, tuple(logs), triggered_this_cycle)
+
+    def _buffer_aux_prediction(self, pos: np.ndarray, quat: np.ndarray) -> None:
+        """Query the provider this cycle and buffer a plausible target.
+
+        Args:
+            pos: Current TCP position ``(3,)`` (m).
+            quat: Current TCP orientation ``(4,)`` ``[x, y, z, w]``.
+        """
+        assert self.bearing_provider is not None
+        target, magnitude, ok = self.bearing_provider.predict(pos, quat)
+        if not ok or target is None:
+            return
+        t = np.asarray(target, dtype=np.float64).reshape(-1)
+        if t.shape != (3,) or not np.all(np.isfinite(t)):
+            return
+        if self.config.aux_min_mag <= magnitude <= self.config.aux_max_mag:
+            self._aux_targets.append(t)
+
+    def _resolve_aux_target(self, pos: np.ndarray) -> tuple[np.ndarray | None, str]:
+        """Reduce the buffered predictions to a trusted target, or explain why not.
+
+        Applies the plausibility + consistency gate (design section 4.4): enough
+        samples, in-range magnitude, low cross-frame spread, and pointing along
+        the established approach (not away, which flags a wrong-port lock).
+
+        Args:
+            pos: Anchor TCP position ``(3,)`` at handoff (m).
+
+        Returns:
+            ``(target_base, "")`` when the aux target is trusted, else
+            ``(None, reason)`` naming the failed check for the fallback log.
+        """
+        n = len(self._aux_targets)
+        if n < self.config.aux_min_samples:
+            return None, f"only {n} aux samples (<{self.config.aux_min_samples})"
+        stack = np.stack(self._aux_targets)
+        median = np.median(stack, axis=0)
+        spread = float(np.linalg.norm(stack.std(axis=0)))
+        d = median - pos
+        mag = float(np.linalg.norm(d))
+        if not (self.config.aux_min_mag <= mag <= self.config.aux_max_mag):
+            return None, f"|offset|={mag * 1e3:.0f}mm out of range"
+        if spread > self.config.aux_consistency_std:
+            return None, (
+                f"cross-frame std {spread * 1e3:.1f}mm>"
+                f"{self.config.aux_consistency_std * 1e3:.0f}mm"
+            )
+        motion_axis = self.axis_estimator.estimate()
+        if motion_axis is not None and float(np.dot(d / mag, motion_axis)) <= 0.0:
+            return None, "aux points away from the approach"
+        return median, ""
+
+    def _engage_descent(
+        self,
+        t: float,
+        pos: np.ndarray,
+        quat: np.ndarray,
+        baseline: np.ndarray | None,
+        logs: list[str],
+    ) -> bool:
+        """Build the :class:`GuardedDescent` at handoff, aux-first with fallback.
+
+        Prefers the learned port bearing (axis toward the aux target, travel cap
+        clamped to ``|offset| + margin`` so the descent reaches the port then
+        stops); falls back to the :class:`ApproachAxisEstimator` motion axis when
+        the aux prediction is unavailable/implausible/inconsistent. Returns False
+        (staying on the learned path) only when neither bearing is available.
+
+        Args:
+            t: Elapsed time (s).
+            pos: Anchor TCP position ``(3,)`` (m).
+            quat: Anchor TCP orientation ``(4,)`` ``[x, y, z, w]``.
+            baseline: Approach-phase mean force ``(3,)`` (N), or None.
+            logs: Mutable log-line list appended to in place.
+
+        Returns:
+            True when a guarded descent was engaged; False to keep the learned
+            path (no usable bearing).
+        """
+        aux_target: np.ndarray | None = None
+        aux_reason = ""
+        if self._aux_active:
+            aux_target, aux_reason = self._resolve_aux_target(pos)
+
+        if aux_target is not None:
+            d = aux_target - pos
+            mag = float(np.linalg.norm(d))
+            axis = d / mag
+            travel_cap = min(
+                self.config.travel_cap, mag + self.config.aux_travel_margin
+            )
+            self._bearing_source = "aux"
+        else:
+            axis = self.axis_estimator.estimate()
+            if axis is None:
+                if not self._axis_unavailable_logged:
+                    self._axis_unavailable_logged = True
+                    logs.append(
+                        f"[guarded] stall detected at t={t:.1f}s but approach axis "
+                        f"could not be estimated ({len(self.axis_estimator)} samples); "
+                        f"staying on the learned path"
+                    )
+                return False
+            travel_cap = self.config.travel_cap
+            self._bearing_source = "motion-axis"
+
+        self.descent = GuardedDescent(
+            axis=axis,
+            anchor_position=pos,
+            anchor_quaternion=quat,
+            baseline_force=baseline,
+            step_size=self.config.step_size,
+            travel_cap=travel_cap,
+            contact_force_threshold=self.config.contact_force_threshold,
+        )
+        self.phase = GuardedPhase.DESCEND
+        baseline_norm = 0.0 if baseline is None else float(np.linalg.norm(baseline))
+        if self._bearing_source == "aux":
+            bearing_desc = (
+                f"bearing=aux target=({aux_target[0]:+.3f},{aux_target[1]:+.3f},"
+                f"{aux_target[2]:+.3f}) |offset|={float(np.linalg.norm(d)) * 1e3:.1f}mm"
+            )
+        else:
+            reason = f" (aux fallback: {aux_reason})" if aux_reason else ""
+            bearing_desc = f"bearing=motion-axis{reason}"
+        logs.append(
+            f"[guarded] HANDOFF at t={t:.1f}s: stall detected, engaging guarded "
+            f"descent. {bearing_desc} "
+            f"axis=({axis[0]:+.3f},{axis[1]:+.3f},{axis[2]:+.3f}) "
+            f"anchor=({pos[0]:+.3f},{pos[1]:+.3f},{pos[2]:+.3f}) "
+            f"baseline|F|={baseline_norm:.2f}N step={self.config.step_size*1e3:.1f}mm "
+            f"cap={travel_cap*1e3:.0f}mm force_thr="
+            f"{self.config.contact_force_threshold:.1f}N"
+        )
+        return True
+
+    def _maybe_reaim(self, pos: np.ndarray, quat: np.ndarray) -> None:
+        """Re-query the provider and rate-limit-blend the descent axis toward it.
+
+        Args:
+            pos: Current TCP position ``(3,)`` (m).
+            quat: Current TCP orientation ``(4,)`` ``[x, y, z, w]``.
+        """
+        assert self.bearing_provider is not None and self.descent is not None
+        target, magnitude, ok = self.bearing_provider.predict(pos, quat)
+        if not ok or target is None:
+            return
+        t = np.asarray(target, dtype=np.float64).reshape(-1)
+        if t.shape != (3,) or not np.all(np.isfinite(t)):
+            return
+        if not (self.config.aux_min_mag <= magnitude <= self.config.aux_max_mag):
+            return
+        d = t - self.descent.anchor_position
+        norm = float(np.linalg.norm(d))
+        if norm < _AXIS_MIN_NORM:
+            return
+        self.descent.reaim(d / norm, self.config.reaim_rate)
 
     def _result(
         self,
@@ -731,6 +991,7 @@ class GuardedDescentController:
             force_delta=0.0 if self.descent is None else self.descent.last_force_delta,
             contacts=0 if self.descent is None else self.descent.contacts,
             triggered_this_cycle=triggered_this_cycle,
+            bearing_source=self._bearing_source,
         )
 
 

@@ -46,6 +46,7 @@ import torch.nn.functional as F  # noqa: E402
 import train_v2 as tv2  # noqa: E402  (repo-root module)
 from opt import augment  # noqa: E402
 from opt import episode_prep  # noqa: E402
+from opt import port_labels  # noqa: E402
 from opt.config import TrainConfig, TrainResult  # noqa: E402
 
 _LOG = logging.getLogger("opt.train_v3")
@@ -151,7 +152,11 @@ def _expand_globs(spec: str) -> list[str]:
 
 
 def build_optimizer(
-    model: torch.nn.Module, lr: float, weight_decay: float, fused: bool
+    model: torch.nn.Module,
+    lr: float,
+    weight_decay: float,
+    fused: bool,
+    params: "list[torch.nn.Parameter] | None" = None,
 ) -> torch.optim.Optimizer:
     """Build a (fused where supported) AdamW optimizer.
 
@@ -160,25 +165,35 @@ def build_optimizer(
         lr: Learning rate.
         weight_decay: Decoupled weight decay.
         fused: Request the fused CUDA kernel (ignored on CPU / if unsupported).
+        params: Explicit parameter list to optimize (e.g. only the aux head for a
+            frozen-encoder probe); defaults to ``model.parameters()``.
 
     Returns:
         A configured ``torch.optim.AdamW`` instance.
     """
+    opt_params = list(model.parameters()) if params is None else list(params)
     use_fused = bool(fused and torch.cuda.is_available())
     try:
         return torch.optim.AdamW(
-            model.parameters(), lr=lr, weight_decay=weight_decay, fused=use_fused
+            opt_params, lr=lr, weight_decay=weight_decay, fused=use_fused
         )
     except (RuntimeError, ValueError) as exc:  # fused unsupported for these params
         _LOG.warning("fused AdamW unavailable (%s); using foreach.", exc)
         return torch.optim.AdamW(
-            model.parameters(), lr=lr, weight_decay=weight_decay, foreach=True
+            opt_params, lr=lr, weight_decay=weight_decay, foreach=True
         )
 
 
 def _load_split(
     dirs: list[str], cfg: TrainConfig, apply_prep: bool
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor | None,
+    torch.Tensor | None,
+    torch.Tensor | None,
+]:
     """Load a set of episodes to GPU tensors with the opt-in demo fixes applied.
 
     Reuses ``train_v2.load_all`` for the (heavy) GPU image/state/action loading,
@@ -187,17 +202,29 @@ def _load_split(
     push-in loss weights. Trimming/weighting are applied only to the training split
     (``apply_prep``); the validation split keeps every frame so its diagnostic
     metric stays comparable across runs. With every flag off the returned tensors
-    are exactly ``load_all``'s output and ``weights`` is ``None`` (legacy path).
+    are exactly ``load_all``'s output, ``weights`` is ``None`` and the two aux
+    tensors are ``None`` (legacy path).
+
+    When ``cfg.port_aux`` is set the hindsight port-offset labels + validity mask
+    are built (in base_link, un-normalized, meters) from the *full* episode
+    (:mod:`opt.port_labels`) and the **same** tail-trim keep-mask is applied to
+    them so they stay aligned index-for-index with the images/state/actions
+    (label-before-trim ordering, design section 3.2).
 
     Args:
         dirs: Episode directories to load.
-        cfg: Training configuration (its flags decide wrench/trim/weighting).
+        cfg: Training configuration (its flags decide wrench/trim/weighting/aux).
         apply_prep: Whether to apply tail-trim + push-in weighting (train only).
 
     Returns:
-        ``(imgs, state, act, weights)`` where ``state`` is ``(N, cfg.state_dim)``
-        and ``weights`` is a ``(N,)`` per-frame loss-weight tensor, or ``None``
-        when push-in weighting is disabled (caller uses the plain mean L1).
+        ``(imgs, state, act, weights, offsets, valid)``. ``state`` is
+        ``(N, cfg.state_dim)``; ``weights`` is a ``(N,)`` push-in weight tensor or
+        ``None``; ``offsets`` is ``(N, aux_dim)`` raw offset labels (m) or
+        ``None``; ``valid`` is a ``(N,)`` bool mask or ``None`` (both ``None``
+        unless ``cfg.port_aux``).
+
+    Raises:
+        ValueError: If the built aux labels do not align with the loaded frames.
     """
     if cfg.use_wrench:
         imgs, state, act, epid, extra = tv2.load_all(
@@ -213,6 +240,23 @@ def _load_split(
         state = torch.cat([state, extra.wrench], dim=1)  # (N, 13)
     else:
         imgs, state, act, epid = tv2.load_all(dirs, cfg.img, cfg.k)
+
+    offsets: torch.Tensor | None = None
+    valid: torch.Tensor | None = None
+    if cfg.port_aux:
+        label_set = port_labels.build_labels(
+            dirs,
+            aux_dim=cfg.aux_dim,
+            aux_frame=cfg.aux_frame,
+            campaign_log=cfg.aux_label_glob,
+        )
+        if label_set.offsets.shape[0] != imgs.shape[0]:
+            raise ValueError(
+                "aux labels misaligned with loaded frames: "
+                f"{label_set.offsets.shape[0]} labels vs {imgs.shape[0]} frames"
+            )
+        offsets = torch.from_numpy(label_set.offsets).to(imgs.device)
+        valid = torch.from_numpy(label_set.valid).to(imgs.device)
 
     weights: torch.Tensor | None = None
     if apply_prep and (cfg.tail_trim or cfg.pushin_enabled):
@@ -234,9 +278,11 @@ def _load_split(
         )
         keep = torch.from_numpy(keep_np).to(imgs.device)
         imgs, state, act = imgs[keep], state[keep], act[keep]
+        if offsets is not None:
+            offsets, valid = offsets[keep], valid[keep]
         if cfg.pushin_enabled:
             weights = torch.from_numpy(w_np[keep_np]).to(state.device)
-    return imgs, state, act, weights
+    return imgs, state, act, weights, offsets, valid
 
 
 def train(cfg: TrainConfig) -> TrainResult:
@@ -262,23 +308,56 @@ def train(cfg: TrainConfig) -> TrainResult:
     if not train_dirs:
         raise FileNotFoundError(f"no training episodes match {cfg.train_globs!r}")
 
-    imt, stt, act_t, w_t = _load_split(train_dirs, cfg, apply_prep=True)
+    imt, stt, act_t, w_t, off_t, valm_t = _load_split(train_dirs, cfg, apply_prep=True)
     if val_dirs:
-        imv, stv, act_v, _ = _load_split(val_dirs, cfg, apply_prep=False)
+        imv, stv, act_v, _, off_v, valm_v = _load_split(val_dirs, cfg, apply_prep=False)
     else:  # overfit mode: validate on the (prepared) training data.
-        imv, stv, act_v = imt, stt, act_t
+        imv, stv, act_v, off_v, valm_v = imt, stt, act_t, off_t, valm_t
 
     smean, sstd = stt.mean(0), stt.std(0) + 1e-6
     amean, astd = act_t.reshape(-1, 6).mean(0), act_t.reshape(-1, 6).std(0) + 1e-6
     stt_n, stv_n = (stt - smean) / sstd, (stv - smean) / sstd
     act_t_n, act_v_n = (act_t - amean) / astd, (act_v - amean) / astd
 
-    model = tv2.Policy(cfg.k, state_dim=cfg.state_dim).to(DEVICE)
+    # Port-bearing aux head: normalize the offset labels with train-split stats
+    # over the *valid* frames only (design section 3.1), and keep the raw
+    # (meters) val labels for the de-normalized cm metric. omean/ostd are stored
+    # in the checkpoint so deploy de-normalizes with the exact training scale.
+    omean = ostd = off_t_n = off_v_n = None
+    aux_dim = cfg.aux_dim if cfg.port_aux else 0
+    if cfg.port_aux:
+        assert off_t is not None and valm_t is not None
+        if not bool(valm_t.any()):
+            raise ValueError(
+                "port_aux is on but no training frame is a valid (KEEP + "
+                "inserted) label source; check the campaign_log join."
+            )
+        sel = off_t[valm_t]
+        omean, ostd = sel.mean(0), sel.std(0) + 1e-6
+        off_t_n = (off_t - omean) / ostd
+        off_v_n = (off_v - omean) / ostd
+
+    model = tv2.Policy(cfg.k, state_dim=cfg.state_dim, aux_dim=aux_dim).to(DEVICE)
+    if cfg.init_ckpt:
+        init = torch.load(cfg.init_ckpt, map_location=DEVICE, weights_only=False)
+        missing, unexpected = model.load_state_dict(init["model"], strict=False)
+        _LOG.info(
+            "initialized weights from %s (missing=%d, unexpected=%d)",
+            cfg.init_ckpt, len(missing), len(unexpected),
+        )
+    # Frozen-encoder probe: freeze encoder AND action head, train only the aux
+    # head (design section 2.2). BN running stats are held by keeping the frozen
+    # submodules in eval() (re-asserted each epoch after runnable.train()).
+    frozen = bool(cfg.port_aux and cfg.aux_freeze_encoder)
+    if frozen:
+        model.enc.requires_grad_(False)
+        model.head.requires_grad_(False)
     fp8_active = maybe_enable_fp8(model, cfg.use_fp8)
     runnable = model
     if cfg.compile_mode != "none":
         runnable = torch.compile(model, mode=cfg.compile_mode)
-    opt = build_optimizer(model, cfg.lr, cfg.weight_decay, cfg.fused_adam)
+    opt_params = list(model.aux_head.parameters()) if frozen else None
+    opt = build_optimizer(model, cfg.lr, cfg.weight_decay, cfg.fused_adam, opt_params)
     ema = EmaWeights(model, cfg.ema_decay) if cfg.ema_enabled else None
 
     # Dedicated RNG for input augmentation so shifts/dropout are reproducible
@@ -289,9 +368,14 @@ def train(cfg: TrainConfig) -> TrainResult:
     n_train = imt.shape[0]
 
     def run_epoch(
-        images, states, actions, train_flag: bool, weights=None
+        images, states, actions, train_flag: bool, weights=None,
+        aux_labels=None, valid=None,
     ) -> float:
         runnable.train(train_flag)
+        if frozen and train_flag:
+            # Keep the frozen encoder/action head (and their BN stats) in eval.
+            model.enc.eval()
+            model.head.eval()
         n = images.shape[0]
         idx = (
             torch.randperm(n, device=DEVICE)
@@ -308,13 +392,27 @@ def train(cfg: TrainConfig) -> TrainResult:
                 if cfg.proprio_dropout > 0.0:
                     st_b = augment.proprio_dropout(st_b, cfg.proprio_dropout, aug_gen)
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                pred = runnable(img_b, st_b)
+                out = runnable(img_b, st_b)
+                pred, aux_pred = (out if cfg.port_aux else (out, None))
                 if weights is None:
-                    loss = F.l1_loss(pred, actions[b])
+                    action_loss = F.l1_loss(pred, actions[b])
                 else:  # push-in weighting: per-frame weighted mean of per-frame L1
                     per_frame = (pred - actions[b]).abs().mean(dim=(1, 2))
                     w_b = weights[b]
-                    loss = (per_frame * w_b).sum() / w_b.sum()
+                    action_loss = (per_frame * w_b).sum() / w_b.sum()
+                if cfg.port_aux and aux_labels is not None:
+                    # Masked aux L1 over valid frames only, independent of the
+                    # push-in weights (design section 3.1).
+                    v_b = valid[b].to(aux_pred.dtype)
+                    aux_l1 = (aux_pred - aux_labels[b]).abs().mean(-1)
+                    aux_loss = (aux_l1 * v_b).sum() / v_b.sum().clamp(min=1.0)
+                    loss = (
+                        cfg.aux_weight * aux_loss
+                        if frozen  # frozen probe optimizes the aux term alone
+                        else action_loss + cfg.aux_weight * aux_loss
+                    )
+                else:
+                    loss = action_loss
             if train_flag:
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
@@ -333,12 +431,62 @@ def train(cfg: TrainConfig) -> TrainResult:
         for i in range(0, imv.shape[0], cfg.bs):
             b = slice(i, i + cfg.bs)
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                pred = runnable(imv[b], stv_n[b]).float()
+                out = runnable(imv[b], stv_n[b])
+            pred = (out[0] if cfg.port_aux else out).float()
             diff = (pred - act_v_n[b]).abs() * astd  # de-normalize, (nb, K, 6)
             first_err += diff[:, 0].mean(1).sum().item()
             chunk_err += diff.mean((1, 2)).sum().item()
         nv = imv.shape[0]
         return first_err / nv, chunk_err / nv
+
+    @torch.no_grad()
+    def val_offset_metrics() -> tuple[float, float, float]:
+        """Return de-normalized port-offset val metrics in cm.
+
+        Computes, over the *valid* held-out frames, the median Euclidean
+        TCP->port error, the same restricted to the near-port operating point
+        (true remaining distance <= ``cfg.near_port_m``), and the median lateral
+        (perpendicular-to-offset) error -- the component that clips distractors
+        (design section 2.5). Errors are frame-invariant so they are computed
+        directly on the ``aux_frame`` vectors.
+
+        Returns:
+            ``(median_cm, nearport_median_cm, lateral_median_cm)``; a metric is
+            NaN when its frame subset is empty.
+        """
+        runnable.eval()
+        eucl_parts: list[torch.Tensor] = []
+        lat_parts: list[torch.Tensor] = []
+        near_parts: list[torch.Tensor] = []
+        for i in range(0, imv.shape[0], cfg.bs):
+            b = slice(i, i + cfg.bs)
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                out = runnable(imv[b], stv_n[b])
+            aux_pred = out[1].float()
+            pred_off = aux_pred[:, :3] * ostd[:3] + omean[:3]  # meters, aux_frame
+            true_off = off_v[b][:, :3]                          # meters (raw)
+            v_b = valm_v[b]
+            err = pred_off - true_off
+            eucl = err.norm(dim=1)
+            tnorm = true_off.norm(dim=1, keepdim=True).clamp(min=1e-9)
+            along = (err * (true_off / tnorm)).sum(1)
+            lateral = (eucl.pow(2) - along.pow(2)).clamp(min=0.0).sqrt()
+            near = v_b & (true_off.norm(dim=1) <= cfg.near_port_m)
+            eucl_parts.append(eucl[v_b])
+            lat_parts.append(lateral[v_b])
+            near_parts.append(eucl[near])
+
+        def _median_cm(parts: list[torch.Tensor]) -> float:
+            cat = torch.cat(parts) if parts else torch.empty(0, device=DEVICE)
+            if cat.numel() == 0:
+                return float("nan")
+            return float(cat.median().item()) * 100.0
+
+        return (
+            _median_cm(eucl_parts),
+            _median_cm(near_parts),
+            _median_cm(lat_parts),
+        )
 
     if torch.cuda.is_available():
         torch.cuda.synchronize()
@@ -346,16 +494,28 @@ def train(cfg: TrainConfig) -> TrainResult:
     final_train_loss, final_val_loss = 0.0, 0.0
     best_first, best_chunk = float("inf"), float("inf")
     final_chunk = 0.0
+    best_offset_cm = float("inf")
+    final_offset_cm = final_near_cm = final_lateral_cm = 0.0
     for ep in range(cfg.epochs):
-        final_train_loss = run_epoch(imt, stt_n, act_t_n, True, weights=w_t)
+        final_train_loss = run_epoch(
+            imt, stt_n, act_t_n, True, weights=w_t,
+            aux_labels=off_t_n, valid=valm_t,
+        )
         if ep % 5 == 0 or ep == cfg.epochs - 1:
             if ema is not None:
                 ema.apply_to(model)
             with torch.no_grad():
-                final_val_loss = run_epoch(imv, stv_n, act_v_n, False)
+                final_val_loss = run_epoch(
+                    imv, stv_n, act_v_n, False,
+                    aux_labels=off_v_n, valid=valm_v,
+                )
             first_err, final_chunk = val_action_l1()
             best_first = min(best_first, first_err)
             best_chunk = min(best_chunk, final_chunk)
+            if cfg.port_aux:
+                final_offset_cm, final_near_cm, final_lateral_cm = val_offset_metrics()
+                if final_offset_cm == final_offset_cm:  # not NaN
+                    best_offset_cm = min(best_offset_cm, final_offset_cm)
             if ema is not None:
                 ema.restore(model)
     if torch.cuda.is_available():
@@ -373,23 +533,29 @@ def train(cfg: TrainConfig) -> TrainResult:
             ema.restore(model)
         out_path = pathlib.Path(cfg.out)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {
-                "model": sd,
-                "amean": amean.cpu(),
-                "astd": astd.cpu(),
-                "smean": smean.cpu(),
-                "sstd": sstd.cpu(),
-                "K": cfg.k,
-                "img": cfg.img,
-                # State dimensionality so DeployACT rebuilds the matching head and
-                # (for 13-D) appends the live wrench. Old checkpoints lack these
-                # keys; DeployACT defaults to 7-D / no-wrench when absent.
-                "state_dim": cfg.state_dim,
-                "use_wrench": cfg.use_wrench,
-            },
-            out_path,
-        )
+        ckpt: dict = {
+            "model": sd,
+            "amean": amean.cpu(),
+            "astd": astd.cpu(),
+            "smean": smean.cpu(),
+            "sstd": sstd.cpu(),
+            "K": cfg.k,
+            "img": cfg.img,
+            # State dimensionality so DeployACT rebuilds the matching head and
+            # (for 13-D) appends the live wrench. Old checkpoints lack these
+            # keys; DeployACT defaults to 7-D / no-wrench when absent.
+            "state_dim": cfg.state_dim,
+            "use_wrench": cfg.use_wrench,
+        }
+        # Port-bearing aux keys, added only when the aux head is trained. Absent
+        # on legacy checkpoints -> DeployACT builds a plain policy (byte-identical).
+        if cfg.port_aux:
+            ckpt["has_aux"] = True
+            ckpt["aux_dim"] = cfg.aux_dim
+            ckpt["aux_frame"] = cfg.aux_frame
+            ckpt["omean"] = omean.cpu()
+            ckpt["ostd"] = ostd.cpu()
+        torch.save(ckpt, out_path)
         ckpt_path = str(out_path)
 
     return TrainResult(
@@ -408,6 +574,10 @@ def train(cfg: TrainConfig) -> TrainResult:
         ckpt_path=ckpt_path,
         best_val_full_chunk=best_chunk,
         final_val_full_chunk=final_chunk,
+        best_val_offset_cm=best_offset_cm,
+        final_val_offset_cm=final_offset_cm,
+        final_val_offset_nearport_cm=final_near_cm,
+        final_val_offset_lateral_cm=final_lateral_cm,
     )
 
 
@@ -453,6 +623,23 @@ def _parse_args(argv: list[str] | None = None) -> TrainConfig:
                     help="Seconds of frames over which the loss weight ramps to W.")
     ap.add_argument("--dt-frame", type=float, default=TrainConfig.dt_frame,
                     help="Recording frame period (s) for seconds->frames conversion.")
+    ap.add_argument("--port-aux", dest="port_aux", action="store_true",
+                    help="Train the port-bearing auxiliary head (TCP->port offset).")
+    ap.add_argument("--aux-dim", type=int, default=TrainConfig.aux_dim,
+                    choices=[3, 6], help="Aux output width: 3=offset, 6=offset+axis.")
+    ap.add_argument("--aux-weight", type=float, default=TrainConfig.aux_weight,
+                    help="Weight on the masked aux L1 term (0 disables the aux grad).")
+    ap.add_argument("--aux-frame", default=TrainConfig.aux_frame,
+                    choices=["tcp", "base"], help="Frame the offset labels live in.")
+    ap.add_argument("--aux-freeze-encoder", dest="aux_freeze_encoder",
+                    action="store_true",
+                    help="Frozen probe: train only the aux head (needs --init-ckpt).")
+    ap.add_argument("--aux-label-glob", default=TrainConfig.aux_label_glob,
+                    help="Explicit campaign_log.csv (empty auto-derives per episode).")
+    ap.add_argument("--init-ckpt", default=TrainConfig.init_ckpt,
+                    help="Checkpoint to initialize weights from (non-strict).")
+    ap.add_argument("--near-port-m", type=float, default=TrainConfig.near_port_m,
+                    help="TCP->port distance (m) defining the near-port val subset.")
     a = ap.parse_args(argv)
     return TrainConfig(
         train_globs=a.train_globs, val_globs=a.val_globs, epochs=a.epochs, bs=a.bs,
@@ -462,6 +649,9 @@ def _parse_args(argv: list[str] | None = None) -> TrainConfig:
         tail_trim=a.tail_trim, tail_trim_threshold=a.tail_trim_threshold,
         tail_trim_margin_s=a.tail_trim_margin_s, use_wrench=a.use_wrench,
         pushin_weight=a.pushin_weight, pushin_ramp_s=a.pushin_ramp_s, dt_frame=a.dt_frame,
+        port_aux=a.port_aux, aux_dim=a.aux_dim, aux_weight=a.aux_weight,
+        aux_frame=a.aux_frame, aux_freeze_encoder=a.aux_freeze_encoder,
+        aux_label_glob=a.aux_label_glob, init_ckpt=a.init_ckpt, near_port_m=a.near_port_m,
     )
 
 
@@ -489,6 +679,15 @@ def main(argv: list[str] | None = None) -> None:
         f"best val first-action |err|={res.best_val_first_action:.5f} m/s  "
         f"best val full-chunk |err|={res.best_val_full_chunk:.5f} m/s"
     )
+    if cfg.port_aux:
+        print(
+            f"[train_v3] port_aux: dim={cfg.aux_dim} frame={cfg.aux_frame} "
+            f"weight={cfg.aux_weight} freeze_encoder={cfg.aux_freeze_encoder} | "
+            f"val_offset_cm={res.final_val_offset_cm:.2f} "
+            f"near-port={res.final_val_offset_nearport_cm:.2f} "
+            f"lateral={res.final_val_offset_lateral_cm:.2f} "
+            f"(best={res.best_val_offset_cm:.2f})"
+        )
     if res.ckpt_path:
         print(f"[train_v3] saved {res.ckpt_path}")
 

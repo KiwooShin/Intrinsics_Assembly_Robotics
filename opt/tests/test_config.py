@@ -85,6 +85,40 @@ class TrainConfigTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             config.TrainConfig(tail_trim_margin_s=-0.1)
 
+    def test_port_aux_defaults_off(self) -> None:
+        c = config.TrainConfig()
+        self.assertFalse(c.port_aux)
+        self.assertFalse(c.port_aux_enabled)
+        self.assertEqual(c.aux_dim, 3)
+        self.assertEqual(c.aux_weight, 0.5)
+        self.assertEqual(c.aux_frame, "tcp")
+        self.assertFalse(c.aux_freeze_encoder)
+        self.assertEqual(c.aux_label_glob, "")
+        self.assertEqual(c.init_ckpt, "")
+
+    def test_port_aux_enabled_property(self) -> None:
+        self.assertTrue(config.TrainConfig(port_aux=True).port_aux_enabled)
+
+    def test_bad_aux_dim(self) -> None:
+        with self.assertRaises(ValueError):
+            config.TrainConfig(aux_dim=4)
+        # 3 and 6 are valid.
+        config.TrainConfig(aux_dim=3)
+        config.TrainConfig(aux_dim=6)
+
+    def test_bad_aux_weight(self) -> None:
+        with self.assertRaises(ValueError):
+            config.TrainConfig(aux_weight=-0.1)
+        config.TrainConfig(aux_weight=0.0)  # 0 is allowed (disables aux grad)
+
+    def test_bad_aux_frame(self) -> None:
+        with self.assertRaises(ValueError):
+            config.TrainConfig(aux_frame="world")
+
+    def test_bad_near_port_m(self) -> None:
+        with self.assertRaises(ValueError):
+            config.TrainConfig(near_port_m=0.0)
+
 
 class ResultRecordsTest(unittest.TestCase):
     """Result dataclasses expose the expected derived fields."""

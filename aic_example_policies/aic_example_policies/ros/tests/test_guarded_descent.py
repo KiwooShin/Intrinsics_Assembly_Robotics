@@ -493,5 +493,167 @@ class GuardedDescentControllerTest(unittest.TestCase):
             ctrl.cycle(0.0, np.zeros(3), np.array([0.0, 0.0, 0.0, 1.0]), None, substeps=0)
 
 
+class _FollowProvider:
+    """Fake bearing provider: target = current TCP + a fixed base_link offset."""
+
+    def __init__(self, offset: np.ndarray, ok: bool = True) -> None:
+        self.offset = np.asarray(offset, dtype=np.float64)
+        self.ok = ok
+        self.calls = 0
+
+    def predict(self, position, quaternion):
+        self.calls += 1
+        if not self.ok:
+            return None, 0.0, False
+        target = np.asarray(position, dtype=np.float64) + self.offset
+        return target, float(np.linalg.norm(self.offset)), True
+
+
+class _AlternatingProvider:
+    """Fake provider whose offset alternates between two far-apart vectors."""
+
+    def __init__(self, offset_a: np.ndarray, offset_b: np.ndarray) -> None:
+        self.offsets = [np.asarray(offset_a, float), np.asarray(offset_b, float)]
+        self.i = 0
+
+    def predict(self, position, quaternion):
+        off = self.offsets[self.i % 2]
+        self.i += 1
+        target = np.asarray(position, dtype=np.float64) + off
+        return target, float(np.linalg.norm(off)), True
+
+
+class AuxBearingHandoffTest(unittest.TestCase):
+    """Tests for the learned port-bearing (``port_aux``) handoff seam."""
+
+    def _aux_config(self, **overrides: object) -> GuardedDescentConfig:
+        base: dict[str, object] = dict(
+            enabled=True,
+            speed_threshold=0.01,
+            stall_window_s=3.0,
+            min_runtime_s=15.0,
+            step_size=0.004,
+            travel_cap=0.12,
+            contact_force_threshold=12.0,
+            use_aux_bearing=True,
+            aux_min_mag=0.005,
+            aux_max_mag=0.12,
+            aux_consistency_std=0.01,
+            aux_travel_margin=0.02,
+            aux_min_samples=3,
+        )
+        base.update(overrides)
+        return GuardedDescentConfig(**base)  # type: ignore[arg-type]
+
+    def _run(self, ctrl: GuardedDescentController, substeps: int = 5) -> list:
+        """Approach -Z then stall, as in the base controller stream."""
+        steps = []
+        pos = np.array([0.15, -0.05, 0.60])
+        force = np.array([19.0, 0.0, 0.0])
+        quat = np.array([0.0, 0.0, 0.0, 1.0])
+        for i in range(120):
+            t = i * 0.275
+            if t < 19.0:
+                pos = pos + np.array([0.0, 0.0, -0.01])
+            steps.append(ctrl.cycle(t, pos, quat, force, substeps=substeps))
+        return steps
+
+    def _handoff(self, steps: list):
+        idx = next(i for i, s in enumerate(steps) if s.triggered_this_cycle)
+        return idx, steps[idx]
+
+    def test_aux_target_drives_axis_and_cap(self) -> None:
+        """A plausible aux offset aims the descent and clamps the travel cap."""
+        prov = _FollowProvider(np.array([0.0, 0.0, -0.06]))  # 6 cm below, downward
+        ctrl = GuardedDescentController(self._aux_config(), bearing_provider=prov)
+        steps = self._run(ctrl)
+        _, handoff = self._handoff(steps)
+        self.assertEqual(ctrl._bearing_source, "aux")
+        self.assertEqual(handoff.bearing_source, "aux")
+        np.testing.assert_allclose(ctrl.descent.axis, [0.0, 0.0, -1.0], atol=1e-6)
+        # travel_cap = min(0.12, |offset| + margin) = min(0.12, 0.06+0.02) = 0.08.
+        self.assertAlmostEqual(ctrl.descent.travel_cap, 0.08, places=6)
+        self.assertTrue(any("bearing=aux" in ln for ln in handoff.log_lines))
+
+    def test_fallback_when_magnitude_out_of_range(self) -> None:
+        """An implausibly large aux offset falls back to the motion axis."""
+        prov = _FollowProvider(np.array([0.0, 0.0, -0.30]))  # 30 cm > aux_max_mag
+        ctrl = GuardedDescentController(self._aux_config(), bearing_provider=prov)
+        steps = self._run(ctrl)
+        _, handoff = self._handoff(steps)
+        self.assertEqual(ctrl._bearing_source, "motion-axis")
+        self.assertAlmostEqual(ctrl.descent.travel_cap, 0.12, places=6)
+        self.assertTrue(any("aux fallback" in ln for ln in handoff.log_lines))
+
+    def test_fallback_when_inconsistent(self) -> None:
+        """A noisy (high cross-frame spread) aux estimate falls back."""
+        prov = _AlternatingProvider(
+            np.array([0.0, 0.0, -0.05]), np.array([0.06, 0.0, -0.05])
+        )  # ~6 cm apart >> aux_consistency_std
+        ctrl = GuardedDescentController(self._aux_config(), bearing_provider=prov)
+        steps = self._run(ctrl)
+        _, handoff = self._handoff(steps)
+        self.assertEqual(ctrl._bearing_source, "motion-axis")
+        self.assertTrue(any("std" in ln for ln in handoff.log_lines))
+
+    def test_fallback_when_pointing_away(self) -> None:
+        """An aux target opposite the approach direction falls back."""
+        prov = _FollowProvider(np.array([0.0, 0.0, +0.06]))  # +Z, away from -Z approach
+        ctrl = GuardedDescentController(self._aux_config(), bearing_provider=prov)
+        steps = self._run(ctrl)
+        _, handoff = self._handoff(steps)
+        self.assertEqual(ctrl._bearing_source, "motion-axis")
+        self.assertTrue(any("points away" in ln for ln in handoff.log_lines))
+
+    def test_fallback_when_provider_unavailable(self) -> None:
+        """A provider that never returns ok leaves the buffer empty -> fallback."""
+        prov = _FollowProvider(np.array([0.0, 0.0, -0.06]), ok=False)
+        ctrl = GuardedDescentController(self._aux_config(), bearing_provider=prov)
+        steps = self._run(ctrl)
+        _, handoff = self._handoff(steps)
+        self.assertEqual(ctrl._bearing_source, "motion-axis")
+        self.assertTrue(any("aux samples" in ln for ln in handoff.log_lines))
+
+    def test_use_aux_bearing_off_ignores_provider(self) -> None:
+        """With use_aux_bearing False the provider is never consulted (byte-identical)."""
+        prov = _FollowProvider(np.array([0.0, 0.0, -0.06]))
+        ctrl = GuardedDescentController(
+            self._aux_config(use_aux_bearing=False), bearing_provider=prov
+        )
+        steps = self._run(ctrl)
+        _, handoff = self._handoff(steps)
+        self.assertEqual(prov.calls, 0)  # provider never queried
+        self.assertEqual(ctrl._bearing_source, "motion-axis")
+
+    def test_none_provider_matches_no_aux(self) -> None:
+        """No provider yields the exact motion-axis descent targets."""
+        cfg = self._aux_config()
+        ctrl_none = GuardedDescentController(cfg, bearing_provider=None)
+        steps_none = self._run(ctrl_none)
+        idx, handoff = self._handoff(steps_none)
+        self.assertEqual(handoff.bearing_source, "motion-axis")
+        # The next descent cycle emits motion-axis (-Z) targets, cap at default.
+        self.assertAlmostEqual(ctrl_none.descent.travel_cap, 0.12, places=6)
+
+    def test_reaim_blends_axis_over_descent(self) -> None:
+        """With reaim on, a shifting aux target rotates the descent axis."""
+        prov = _FollowProvider(np.array([0.0, 0.0, -0.06]))
+        ctrl = GuardedDescentController(
+            self._aux_config(reaim=True), bearing_provider=prov
+        )
+        steps = self._run(ctrl)
+        idx, _ = self._handoff(steps)
+        axis_at_handoff = ctrl.descent.axis.copy()
+        # After handoff, shift the provider target sideways; reaim should tilt the
+        # axis toward +X over subsequent descent cycles.
+        prov.offset = np.array([0.05, 0.0, -0.06])
+        pos = np.array([0.15, -0.05, -0.10])
+        quat = np.array([0.0, 0.0, 0.0, 1.0])
+        force = np.array([19.0, 0.0, 0.0])
+        for j in range(5):
+            ctrl.cycle(30.0 + j * 0.275, pos, quat, force, substeps=3)
+        self.assertGreater(ctrl.descent.axis[0], axis_at_handoff[0])
+
+
 if __name__ == "__main__":
     unittest.main()

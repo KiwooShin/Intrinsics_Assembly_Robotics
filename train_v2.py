@@ -236,16 +236,61 @@ class Encoder(nn.Module):
     def forward(self, x): return self.net(x)
 
 class Policy(nn.Module):
-    def __init__(self, K, state_dim=7, feat=128):
+    """3-camera ACT-lite policy with an optional port-bearing auxiliary head.
+
+    The shared encoder embeds each of the 3 cameras to ``feat`` dims; the
+    concatenated ``[3*feat + state_dim]`` feature drives the action head (a
+    ``K*6`` twist chunk). When ``aux_dim > 0`` a second small MLP branches off
+    the *same* feature vector to regress the TCP->port offset (the ``port_aux``
+    head, ``docs/design_port_aux_head.md``). With ``aux_dim == 0`` (the default)
+    no auxiliary module is created and both the ``state_dict`` and the forward
+    output are byte-identical to the legacy policy.
+    """
+
+    def __init__(self, K: int, state_dim: int = 7, feat: int = 128, aux_dim: int = 0) -> None:
+        """Build the encoder, action head, and (optionally) the auxiliary head.
+
+        Args:
+            K: Action-chunk length (number of predicted future 6-D twists).
+            state_dim: Proprioceptive state width (7 = TCP pose, 13 = +wrench).
+            feat: Per-camera encoder feature dimension.
+            aux_dim: Auxiliary-head output width (0 disables it; 3 = offset,
+                6 = offset + axis). Must be >= 0.
+
+        Raises:
+            ValueError: If ``aux_dim`` is negative.
+        """
         super().__init__(); self.K = K
+        if aux_dim < 0:
+            raise ValueError(f"aux_dim must be >= 0, got {aux_dim}")
+        self.aux_dim = aux_dim
         self.enc = Encoder(feat)
         self.head = nn.Sequential(nn.Linear(feat * 3 + state_dim, 512), nn.ReLU(),
                                   nn.Linear(512, 512), nn.ReLU(), nn.Linear(512, K * 6))
+        if aux_dim > 0:
+            self.aux_head = nn.Sequential(
+                nn.Linear(feat * 3 + state_dim, 256), nn.ReLU(),
+                nn.Linear(256, aux_dim))
+
     def forward(self, imgs, state):
+        """Predict a twist chunk, plus the aux offset when the aux head is on.
+
+        Args:
+            imgs: Image tensor shaped ``(B, 3, 3, H, W)``.
+            state: State tensor shaped ``(B, state_dim)``.
+
+        Returns:
+            The ``(B, K, 6)`` twist chunk when ``aux_dim == 0``; otherwise a
+            tuple ``(action, aux)`` where ``aux`` is ``(B, aux_dim)``.
+        """
         B = imgs.shape[0]
         x = imgs.view(B * 3, *imgs.shape[2:]).to(memory_format=torch.channels_last)
         f = self.enc(x).view(B, -1)
-        return self.head(torch.cat([f, state], 1)).view(B, self.K, 6)
+        h = torch.cat([f, state], 1)
+        act = self.head(h).view(B, self.K, 6)
+        if self.aux_dim > 0:
+            return act, self.aux_head(h)
+        return act
 
 def main():
     ap = argparse.ArgumentParser()

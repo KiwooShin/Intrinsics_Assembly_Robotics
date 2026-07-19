@@ -46,6 +46,10 @@ from aic_example_policies.ros.guarded_descent import (
     GuardedDescentConfig,
     GuardedDescentController,
 )
+from aic_example_policies.ros.port_offset import (
+    PortOffsetPrediction,
+    predict_from_aux,
+)
 
 IMG = 128
 
@@ -72,15 +76,73 @@ class _Encoder(nn.Module):
     def forward(self, x): return self.net(x)
 
 class _Policy(nn.Module):
-    def __init__(self, K, state_dim=7, feat=128):
+    """Inference mirror of ``train_v2.Policy`` (kept byte-identical in lockstep).
+
+    When ``aux_dim > 0`` the port-bearing auxiliary head is added and ``forward``
+    returns ``(action, aux)``; with ``aux_dim == 0`` (old checkpoints) the module
+    and forward output are identical to the legacy policy.
+    """
+
+    def __init__(self, K, state_dim=7, feat=128, aux_dim=0):
         super().__init__(); self.K = K
+        self.aux_dim = aux_dim
         self.enc = _Encoder(feat)
         self.head = nn.Sequential(nn.Linear(feat * 3 + state_dim, 512), nn.ReLU(),
                                   nn.Linear(512, 512), nn.ReLU(), nn.Linear(512, K * 6))
+        if aux_dim > 0:
+            self.aux_head = nn.Sequential(
+                nn.Linear(feat * 3 + state_dim, 256), nn.ReLU(),
+                nn.Linear(256, aux_dim))
     def forward(self, imgs, state):
         B = imgs.shape[0]
         f = self.enc(imgs.view(B * 3, *imgs.shape[2:])).view(B, -1)
-        return self.head(torch.cat([f, state], 1)).view(B, self.K, 6)
+        h = torch.cat([f, state], 1)
+        act = self.head(h).view(B, self.K, 6)
+        if self.aux_dim > 0:
+            return act, self.aux_head(h)
+        return act
+
+
+class _AuxBearingProvider:
+    """Adapts ``DeployACT._predict_offset`` to the guarded ``PortBearingProvider``.
+
+    Holds the latest observation (set by the deploy loop each cycle) and, when
+    queried by ``GuardedDescentController``, runs the aux head on it and returns
+    the base_link port target with a plausibility ``ok`` flag. Kept tiny so the
+    guarded-descent module stays torch/ROS-free.
+    """
+
+    def __init__(self, deploy: "DeployACT", min_mag: float, max_mag: float) -> None:
+        """Initialize the provider.
+
+        Args:
+            deploy: The owning :class:`DeployACT` (runs the aux head).
+            min_mag: Lower plausible offset magnitude (m).
+            max_mag: Upper plausible offset magnitude (m).
+        """
+        self._deploy = deploy
+        self._min_mag = float(min_mag)
+        self._max_mag = float(max_mag)
+        self.obs = None
+
+    def predict(self, position: np.ndarray, quaternion: np.ndarray):
+        """Return ``(target_base, magnitude, ok)`` for the latest observation.
+
+        Args:
+            position: Current TCP position ``(3,)`` (unused; the offset is
+                resolved from ``obs`` for image+pose consistency).
+            quaternion: Current TCP orientation ``(4,)`` (unused; see above).
+
+        Returns:
+            ``(target_base, magnitude, ok)`` per the ``PortBearingProvider``
+            protocol; ``(None, 0.0, False)`` when no observation/aux head.
+        """
+        if self.obs is None:
+            return None, 0.0, False
+        pred = self._deploy._predict_offset(self.obs)
+        if pred is None:
+            return None, 0.0, False
+        return pred.target_base, pred.magnitude, pred.plausible(self._min_mag, self._max_mag)
 
 
 class DeployACT(Policy):
@@ -95,7 +157,16 @@ class DeployACT(Policy):
         # 13-D checkpoints append the live wrist wrench to the state. Same
         # opt-in pattern as AIC_ENSEMBLE: the checkpoint decides, no env needed.
         self.state_dim = int(ck.get("state_dim", state_assembly.POSE_DIM))
-        self.model = _Policy(self.K, state_dim=self.state_dim).to(self.device)
+        # Port-bearing auxiliary head (docs/design_port_aux_head.md), opt-in by
+        # the checkpoint: old checkpoints lack ``has_aux`` -> aux_dim 0 -> a plain
+        # _Policy, byte-identical. ``omean/ostd/aux_frame`` de-normalize the aux
+        # output and resolve it into base_link at deploy time.
+        self.has_aux = bool(ck.get("has_aux", False))
+        self.aux_dim = int(ck.get("aux_dim", 0)) if self.has_aux else 0
+        self.aux_frame = str(ck.get("aux_frame", "tcp"))
+        self.omean = ck["omean"].to(self.device) if self.aux_dim > 0 else None
+        self.ostd = ck["ostd"].to(self.device) if self.aux_dim > 0 else None
+        self.model = _Policy(self.K, state_dim=self.state_dim, aux_dim=self.aux_dim).to(self.device)
         self.model.load_state_dict(ck["model"]); self.model.eval()
         self.amean = ck["amean"].to(self.device); self.astd = ck["astd"].to(self.device)
         self.smean = ck["smean"].to(self.device); self.sstd = ck["sstd"].to(self.device)
@@ -117,23 +188,43 @@ class DeployACT(Policy):
         _gcfg = GuardedDescentConfig.from_env(os.environ)
         if _gcfg.enabled:
             self._guarded_config = _gcfg
+        # Learned port-bearing handoff (AIC_GUARDED_AUX): only when the guarded
+        # probe is on AND this checkpoint carries an aux head. Otherwise the
+        # guarded controller uses the motion-axis estimate unchanged.
+        self._aux_bearing_enabled = bool(
+            self.has_aux
+            and self._guarded_config is not None
+            and self._guarded_config.use_aux_bearing
+        )
         guarded_banner = "OFF"
         if self._guarded_config is not None:
             gc = self._guarded_config
+            aux_tag = (
+                f", aux_bearing=ON(frame={self.aux_frame}, "
+                f"mag[{gc.aux_min_mag * 1e3:g},{gc.aux_max_mag * 1e3:g}]mm, "
+                f"reaim={gc.reaim})"
+                if self._aux_bearing_enabled
+                else ""
+            )
             guarded_banner = (
                 f"ON (speed<{gc.speed_threshold:g} m/s for {gc.stall_window_s:g}s after "
                 f"{gc.min_runtime_s:g}s, step={gc.step_size * 1e3:g}mm "
                 f"cap={gc.travel_cap * 1e3:g}mm force_thr={gc.contact_force_threshold:g}N, "
-                f"z_stiff={gc.z_stiffness})"
+                f"z_stiff={gc.z_stiffness}{aux_tag})"
             )
         ensemble_banner = (
             "ON (m=%g, w_i=exp(-m*i), i=0 oldest)" % self._ensemble.decay
             if self._ensemble is not None
             else "OFF"
         )
+        aux_tag = (
+            f", +port_aux(dim={self.aux_dim},frame={self.aux_frame})"
+            if self.aux_dim > 0 else ""
+        )
         self.get_logger().info(
             f"DeployACT loaded {ckpt_path} (K={self.K}, state_dim={self.state_dim}"
-            f"{', +wrist_wrench' if self.state_dim == state_assembly.POSE_WRENCH_DIM else ''}) "
+            f"{', +wrist_wrench' if self.state_dim == state_assembly.POSE_WRENCH_DIM else ''}"
+            f"{aux_tag}) "
             f"on {self.device}; "
             f"MODE_POSITION receding horizon exec_steps={self.exec_steps} substeps={SUBSTEPS}; "
             f"temporal_ensembling={ensemble_banner}; guarded_descent={guarded_banner}"
@@ -146,14 +237,32 @@ class DeployACT(Policy):
         t = F.interpolate(t, size=(IMG, IMG), mode="bilinear", align_corners=False)  # train_v2
         return (t - 0.5) / 0.5
 
-    def _predict_chunk(self, obs) -> np.ndarray:
-        """Run inference and return the denormalized twist chunk.
+    def _forward(self, imgs, state):
+        """Run the policy, returning ``(action, aux_or_None)`` uniformly.
+
+        Args:
+            imgs: Image tensor ``(1, 3, 3, H, W)``.
+            state: Normalized state tensor ``(1, state_dim)``.
+
+        Returns:
+            ``(action, aux)`` where ``action`` is ``(1, K, 6)`` and ``aux`` is
+            ``(1, aux_dim)`` when the aux head is present, else ``None``.
+        """
+        out = self.model(imgs, state)
+        if self.aux_dim > 0:
+            return out
+        return out, None
+
+    def _prepare_inputs(self, obs):
+        """Build the normalized network inputs and the raw TCP pose from an obs.
 
         Args:
             obs: The current ``Observation`` message.
 
         Returns:
-            A ``(K, 6)`` numpy array of base_link-frame twists (m/s, rad/s).
+            ``(imgs, state, pose)`` where ``imgs`` is ``(1, 3, 3, H, W)``,
+            ``state`` is the normalized ``(1, state_dim)`` tensor, and ``pose`` is
+            the raw ``[x, y, z, qx, qy, qz, qw]`` base_link TCP pose (numpy).
         """
         imgs = torch.stack([self._img(obs.left_image), self._img(obs.center_image),
                             self._img(obs.right_image)], 1)      # (1,3,3,H,W)
@@ -171,9 +280,39 @@ class DeployACT(Policy):
         raw_state = state_assembly.assemble_state(pose, wrench, self.state_dim)
         state = torch.from_numpy(raw_state).to(self.device).unsqueeze(0)
         state = (state - self.smean) / self.sstd
+        return imgs, state, pose
+
+    def _predict_chunk(self, obs) -> np.ndarray:
+        """Run inference and return the denormalized twist chunk.
+
+        Args:
+            obs: The current ``Observation`` message.
+
+        Returns:
+            A ``(K, 6)`` numpy array of base_link-frame twists (m/s, rad/s).
+        """
+        imgs, state, _ = self._prepare_inputs(obs)
         with torch.inference_mode():
-            pred = self.model(imgs, state)[0]                      # (K, 6) normalized
-        return (pred * self.astd + self.amean).cpu().numpy()
+            act, _ = self._forward(imgs, state)                    # act (1,K,6) norm
+        return (act[0] * self.astd + self.amean).cpu().numpy()
+
+    def _predict_offset(self, obs) -> PortOffsetPrediction | None:
+        """Run the aux head and resolve a base_link TCP->port prediction.
+
+        Args:
+            obs: The current ``Observation`` message.
+
+        Returns:
+            The :class:`PortOffsetPrediction` (offset/target in base_link), or
+            None when this checkpoint has no aux head.
+        """
+        if self.aux_dim == 0:
+            return None
+        imgs, state, pose = self._prepare_inputs(obs)
+        with torch.inference_mode():
+            _, aux = self._forward(imgs, state)                    # aux (1,aux_dim) norm
+        aux_vec = (aux[0] * self.ostd + self.omean).cpu().numpy()  # de-normalized
+        return predict_from_aux(pose[:3], pose[3:7], aux_vec, frame=self.aux_frame)
 
     @staticmethod
     def _wrench_force(obs) -> np.ndarray:
@@ -239,9 +378,18 @@ class DeployACT(Policy):
         if self._ensemble is not None:
             self._ensemble.clear()
         # Fresh guarded-descent controller per episode (None when AIC_GUARDED off,
-        # keeping the loop below byte-identical to the plain policy).
+        # keeping the loop below byte-identical to the plain policy). When the
+        # learned port bearing is enabled, wire a per-episode provider whose
+        # ``obs`` the loop refreshes each cycle so the aux head aims the handoff.
+        aux_provider = (
+            _AuxBearingProvider(
+                self, self._guarded_config.aux_min_mag, self._guarded_config.aux_max_mag
+            )
+            if self._guarded_config is not None and self._aux_bearing_enabled
+            else None
+        )
         guarded = (
-            GuardedDescentController(self._guarded_config)
+            GuardedDescentController(self._guarded_config, bearing_provider=aux_provider)
             if self._guarded_config is not None
             else None
         )
@@ -256,6 +404,8 @@ class DeployACT(Policy):
             # probe is disabled, so DeployACT is byte-identical with AIC_GUARDED
             # unset.
             if guarded is not None:
+                if aux_provider is not None:
+                    aux_provider.obs = obs  # refresh the aux head's live obs
                 p_g = obs.controller_state.tcp_pose
                 pos_g = np.array([p_g.position.x, p_g.position.y, p_g.position.z])
                 quat_g = np.array([p_g.orientation.x, p_g.orientation.y,

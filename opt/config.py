@@ -63,6 +63,27 @@ class TrainConfig:
         dt_frame: Recording frame period (s) used to convert ``tail_trim_margin_s``
             / ``pushin_ramp_s`` to frame counts. Matches DeployACT's ``DT_FRAME``
             (~3.64 Hz, ds_wide median 0.275 s).
+        port_aux: Train the port-bearing auxiliary head (predict the TCP->port
+            offset) jointly with the action head. Off = legacy single-head path,
+            byte-identical checkpoint (no aux keys). See
+            ``docs/design_port_aux_head.md``.
+        aux_dim: Auxiliary-head output width: 3 (offset) or 6 (offset + axis).
+        aux_weight: Weight on the masked aux L1 term in the total loss
+            (``loss = action_L1 + aux_weight * aux_L1``). Must be >= 0.
+        aux_frame: Frame the offset labels/predictions live in: ``'tcp'`` (lower
+            variance; deploy rotates once by the live TCP quaternion) or
+            ``'base'`` (predicted directly in base_link).
+        aux_freeze_encoder: Frozen-encoder probe -- freeze the encoder AND action
+            head and train only the aux head (measures port bearing already in
+            the features; ships an aux head without touching deployed action
+            weights). Requires ``init_ckpt`` to load a pretrained encoder.
+        aux_label_glob: Explicit ``campaign_log.csv`` locator for the labels;
+            empty auto-derives ``<ds>/campaign_log.csv`` beside each episode.
+        init_ckpt: Optional checkpoint to initialize weights from before training
+            (encoder + action head; aux head stays freshly initialized). Loaded
+            non-strict. Required for a meaningful ``aux_freeze_encoder`` probe.
+        near_port_m: TCP->port distance (m) below which a valid frame counts as
+            "near-port" for the ``val_offset_nearport_cm`` operating-point metric.
     """
 
     train_globs: str = DEFAULT_TRAIN_EPS
@@ -88,6 +109,14 @@ class TrainConfig:
     pushin_weight: float = 1.0
     pushin_ramp_s: float = 2.0
     dt_frame: float = 0.275
+    port_aux: bool = False
+    aux_dim: int = 3
+    aux_weight: float = 0.5
+    aux_frame: str = "tcp"
+    aux_freeze_encoder: bool = False
+    aux_label_glob: str = ""
+    init_ckpt: str = ""
+    near_port_m: float = 0.03
 
     def __post_init__(self) -> None:
         """Validate hyperparameters at the public boundary.
@@ -127,6 +156,14 @@ class TrainConfig:
             raise ValueError(f"pushin_ramp_s must be >= 0, got {self.pushin_ramp_s}")
         if self.dt_frame <= 0.0:
             raise ValueError(f"dt_frame must be > 0, got {self.dt_frame}")
+        if self.aux_dim not in (3, 6):
+            raise ValueError(f"aux_dim must be 3 or 6, got {self.aux_dim}")
+        if self.aux_weight < 0.0:
+            raise ValueError(f"aux_weight must be >= 0, got {self.aux_weight}")
+        if self.aux_frame not in ("tcp", "base"):
+            raise ValueError(f"aux_frame must be 'tcp' or 'base', got {self.aux_frame!r}")
+        if self.near_port_m <= 0.0:
+            raise ValueError(f"near_port_m must be > 0, got {self.near_port_m}")
 
     @property
     def ema_enabled(self) -> bool:
@@ -142,6 +179,11 @@ class TrainConfig:
     def pushin_enabled(self) -> bool:
         """Whether push-in loss weighting is active (peak weight > 1)."""
         return self.pushin_weight > 1.0
+
+    @property
+    def port_aux_enabled(self) -> bool:
+        """Whether the port-bearing auxiliary head is trained this run."""
+        return self.port_aux
 
 
 @dataclasses.dataclass(frozen=True)
@@ -166,6 +208,16 @@ class TrainResult:
     # that do not populate them working.
     best_val_full_chunk: float = float("inf")
     final_val_full_chunk: float = 0.0
+    # Port-bearing auxiliary-head validation metrics (cm), populated only when
+    # ``port_aux`` is on; defaults keep legacy single-head callers working.
+    # ``val_offset_cm`` is the median Euclidean TCP->port error over valid val
+    # frames; ``nearport`` restricts to the near-port operating point (design
+    # section 2.5 adoption gate < 2 cm); ``lateral`` is the perpendicular error
+    # (the component that clips distractors). ``best`` is the min over evals.
+    best_val_offset_cm: float = float("inf")
+    final_val_offset_cm: float = 0.0
+    final_val_offset_nearport_cm: float = 0.0
+    final_val_offset_lateral_cm: float = 0.0
 
 
 @dataclasses.dataclass(frozen=True)

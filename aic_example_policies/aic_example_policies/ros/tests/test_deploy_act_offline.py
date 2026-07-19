@@ -23,7 +23,12 @@ from __future__ import annotations
 
 import os
 import pathlib
+import tempfile
 import unittest
+
+import numpy as np
+
+from aic_example_policies.ros import port_offset
 
 try:
     import torch
@@ -75,16 +80,20 @@ if torch is not None:
     class _Policy(nn.Module):
         """3-camera ACT-lite policy (mirrors ``DeployACT._Policy``)."""
 
-        def __init__(self, k: int, state_dim: int = 7, feat: int = 128) -> None:
-            """Build encoder + MLP head.
+        def __init__(
+            self, k: int, state_dim: int = 7, feat: int = 128, aux_dim: int = 0
+        ) -> None:
+            """Build encoder + MLP head (+ optional aux head).
 
             Args:
                 k: Action-chunk length (number of predicted future steps).
                 state_dim: Dimension of the proprioceptive state (TCP pose = 7).
                 feat: Per-camera feature dimension.
+                aux_dim: Port-bearing aux head width (0 disables it).
             """
             super().__init__()
             self.k = k
+            self.aux_dim = aux_dim
             self.enc = _Encoder(feat)
             self.head = nn.Sequential(
                 nn.Linear(feat * 3 + state_dim, 512),
@@ -93,22 +102,33 @@ if torch is not None:
                 nn.ReLU(),
                 nn.Linear(512, k * 6),
             )
+            if aux_dim > 0:
+                self.aux_head = nn.Sequential(
+                    nn.Linear(feat * 3 + state_dim, 256),
+                    nn.ReLU(),
+                    nn.Linear(256, aux_dim),
+                )
 
         def forward(
             self, imgs: "torch.Tensor", state: "torch.Tensor"
         ) -> "torch.Tensor":
-            """Predict a (B, K, 6) twist chunk from images and state.
+            """Predict a (B, K, 6) twist chunk (+ aux) from images and state.
 
             Args:
                 imgs: Image tensor of shape ``(B, 3, 3, H, W)``.
                 state: State tensor of shape ``(B, state_dim)``.
 
             Returns:
-                Action chunk tensor of shape ``(B, K, 6)``.
+                A ``(B, K, 6)`` chunk when ``aux_dim == 0``; otherwise a tuple
+                ``(action, aux)`` with ``aux`` shaped ``(B, aux_dim)``.
             """
             b = imgs.shape[0]
             f = self.enc(imgs.view(b * 3, *imgs.shape[2:])).view(b, -1)
-            return self.head(torch.cat([f, state], 1)).view(b, self.k, 6)
+            h = torch.cat([f, state], 1)
+            act = self.head(h).view(b, self.k, 6)
+            if self.aux_dim > 0:
+                return act, self.aux_head(h)
+            return act
 
 
 def _load_model(device: "torch.device") -> "tuple[_Policy, dict]":
@@ -163,6 +183,89 @@ class DeployActOfflineTest(unittest.TestCase):
     def test_checkpoint_infers_on_gpu(self) -> None:
         """The checkpoint loads and produces a finite (K, 6) chunk on the GPU."""
         self._run_inference(torch.device("cuda"))
+
+    def test_legacy_checkpoint_has_no_aux_head(self) -> None:
+        """The deployed (legacy) checkpoint carries no aux head -> aux_dim 0 path."""
+        _, ckpt = _load_model(torch.device("cpu"))
+        self.assertNotIn("has_aux", ckpt)
+        self.assertFalse(any("aux_head" in k for k in ckpt["model"]))
+
+
+@unittest.skipUnless(torch is not None, f"torch not importable: {_TORCH_IMPORT_ERROR}")
+class AuxCheckpointOfflineTest(unittest.TestCase):
+    """A synthetic aux checkpoint drives the DeployACT ``_predict_offset`` math."""
+
+    def _make_aux_checkpoint(self, path: pathlib.Path, aux_frame: str) -> None:
+        """Save a tiny aux checkpoint (aux_dim=3) with omean/ostd/aux_frame."""
+        torch.manual_seed(0)
+        model = _Policy(k=4, state_dim=7, aux_dim=3)
+        # Offset labels here live around a ~5 cm downward vector; store matching
+        # de-normalization stats so a ~unit aux output maps to a plausible offset.
+        omean = torch.tensor([0.0, 0.0, -0.05])
+        ostd = torch.tensor([0.02, 0.02, 0.02])
+        torch.save(
+            {
+                "model": model.state_dict(),
+                "amean": torch.zeros(6), "astd": torch.ones(6),
+                "smean": torch.zeros(7), "sstd": torch.ones(7),
+                "K": 4, "img": 128, "state_dim": 7,
+                "has_aux": True, "aux_dim": 3, "aux_frame": aux_frame,
+                "omean": omean, "ostd": ostd,
+            },
+            path,
+        )
+
+    def _predict_offset_offline(self, ckpt: dict, obs_pose: np.ndarray):
+        """Reproduce DeployACT._predict_offset with the reconstructed policy.
+
+        Args:
+            ckpt: The loaded checkpoint dict (with aux keys).
+            obs_pose: The live ``[x, y, z, qx, qy, qz, qw]`` base_link TCP pose.
+
+        Returns:
+            The resolved :class:`port_offset.PortOffsetPrediction`.
+        """
+        model = _Policy(ckpt["K"], state_dim=ckpt["state_dim"], aux_dim=ckpt["aux_dim"])
+        model.load_state_dict(ckpt["model"])  # strict: aux head must be present
+        model.eval()
+        imgs = torch.rand(1, 3, 3, 128, 128)
+        state = torch.from_numpy(obs_pose.astype(np.float32)).unsqueeze(0)
+        with torch.inference_mode():
+            _, aux = model(imgs, state)
+        aux_vec = (aux[0] * ckpt["ostd"] + ckpt["omean"]).cpu().numpy()
+        return port_offset.predict_from_aux(
+            obs_pose[:3], obs_pose[3:7], aux_vec, frame=ckpt["aux_frame"]
+        )
+
+    def test_aux_checkpoint_predicts_plausible_offset(self) -> None:
+        """An aux checkpoint yields a base_link target of plausible magnitude."""
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "aux.pt"
+            self._make_aux_checkpoint(path, aux_frame="tcp")
+            ckpt = torch.load(path, map_location="cpu", weights_only=False)
+            self.assertTrue(ckpt["has_aux"])
+            self.assertTrue(any("aux_head" in k for k in ckpt["model"]))
+            pose = np.array([0.1, 0.2, 0.5, 0.0, 0.0, 0.0, 1.0])
+            pred = self._predict_offset_offline(ckpt, pose)
+            # target = tcp_pos + offset_base; magnitude within a plausible window.
+            self.assertEqual(pred.offset_base.shape, (3,))
+            self.assertEqual(pred.target_base.shape, (3,))
+            self.assertTrue(np.all(np.isfinite(pred.offset_base)))
+            self.assertTrue(pred.plausible(0.005, 0.20))
+            np.testing.assert_allclose(
+                pred.target_base, pose[:3] + pred.offset_base, atol=1e-9
+            )
+
+    def test_identity_orientation_offset_matches_base(self) -> None:
+        """With identity TCP orientation, TCP-frame offset equals the base offset."""
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "aux.pt"
+            self._make_aux_checkpoint(path, aux_frame="tcp")
+            ckpt = torch.load(path, map_location="cpu", weights_only=False)
+            pose = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])  # identity quat
+            pred = self._predict_offset_offline(ckpt, pose)
+            # Downward-biased omean -> the offset's Z component is negative.
+            self.assertLess(pred.offset_base[2], 0.0)
 
 
 if __name__ == "__main__":

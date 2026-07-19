@@ -13,6 +13,28 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-19 16:00 — Run #2 cycle 1: probe answered (bearing is the gap); K specialists found
+
+**Avg score:** gauge (eval_suite_ab5) baseline v2_wide **23.1±2.1** (n=15);
+this cycle v3fix_k8 16.9 (n=5), v3fix_k16 ~20.5 (n=4 valid, off3 crashed);
+best-of-both per-config routing ≈30–32. Guarded probe officials (n=9): off1
+11.3 (−24 mounts) / off2 42.8±0.1 clean / off3 35.4±0.2. 0 insertions
+anywhere; still on the ~23 rung, target 40.
+
+**What's missing:** (1) an insertion event — every officials point is still
+tier_3 proximity; (2) port BEARING at the stall handoff (probe proved descent
+is stable but blind; aux-head spec'd + implementing); (3) cfg_001
+moderate-yaw coverage dead on all ckpts; (4) valid off3 for k16 (engine
+crash); (5) k8's new off1 collision makes it unshippable despite its real
+cfg_005 collision-fix.
+
+**Next 4 h:** dual-arm officials campaign running (bare k16 n=3 confirmation
+gate: off1 IQM+≥5 + 0 collisions; then guarded-on-k16 n=3 — first seat
+attempt from the 0.05 m clean handoff; ≥1 insertion → GuardedInsert
+hardening). Parallel: port-offset aux-head implementation (CPU) → frozen-probe
+retrain when GPU frees. Next cycle ~20:00: campaign verdict + aux-head
+frozen-probe cm-error + progress entry.
+
 ## 2026-07-19 09:10 — RUN COMPLETE: n=3 reps close the ensembling question (keep OFF); wrapping the 48 h session
 
 The 3-rep experiment finished 09:01: no config separates ensembling ON from

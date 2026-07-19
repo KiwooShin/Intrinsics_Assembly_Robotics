@@ -707,3 +707,46 @@ from a single 180-s trial carries ±3–18 pt noise with possible outcome flips;
 adoption decisions need n≥3 reps (arm-level differences below ~4–5 pts are
 unresolvable even at n=3). This retroactively explains several of this run's
 "inconclusive" bootstraps and empirically grounds the canonical-metric rule.
+
+## 2026-07-19 16:00 — Run #2 cycle 1: guarded-descent probe + de-aliased retrains (P0 of PLAN_SCORE90)
+
+**Probe (judge-selected day-1 experiment; guarded descent from stall, v2_wide
+base, 3 officials × n=3):** 0/9 insertion events. off1 11.3 mean with −24
+`tool_link`↔`nic_card_mount_2` contacts every rep (distance stuck 0.07 m);
+off2 42.8±0.1 CLEAN (vs OFF 41.5±1.7 — descent stabilizes variance ×17);
+off3 35.4±0.2 clean. **Verdict: the descent is stable but blind — the missing
+sense is PORT BEARING at the handoff pose**, not force or willingness to push.
+
+**Gauge (13-D wrench + tail-trim + push-in-weight + shift-aug retrains, n=1):**
+
+| ckpt | cfg_001 | cfg_005 | off1 | off2 | off3 | mean |
+|---|---|---|---|---|---|---|
+| baseline v2_wide (n=3) | 0.67 | 7.34 coll | 29.97 | 41.47 | 35.97 | **23.1±2.1** |
+| v3fix_k8 | 1.0 miss | **41.6 CLEAN** (coll fixed) | **−23 COLL (new)** | 37.7 | 27.3 | 16.9 |
+| v3fix_k16 | 1.0 miss | 1.0 miss | **41.7 BEST-EVER** | 38.3 | crashed* | ~20.5–23.4 |
+
+*off3 k16 = engine crash (exit 1 after zenoh hang), invalid — rerunning.
+
+**Cycle-analysis findings (Opus agent, full report in transcript):** (1) off1
+has a distractor mount in the wrist's descent corridor — k16 threads it clean,
+k8 drives into it (first-ever SFP clean −23), v2+guarded grazes it; a
+*threading* problem. (2) K-divergence is a **horizon phenotype**: K=16
+commit+thread → officials specialist; K=8 reactive course-correct → stratified
+reach (cfg_005 collision→clean is a discrete real win). Complementary
+specialists, per CLAUDE §6 report-both-K. (3) Neither adopts as a single
+policy; k16 advances to n=3 as Track-S base; k8 is unshippable (off1 −23).
+(4) Ladder position: still ~23; best-of-both routing ≈30–32; the 40 rung needs
+an insertion event or cfg_001 coverage.
+
+**Port-offset aux head SPEC'd** (docs/design_port_aux_head.md): raw bags are
+gone → **hindsight terminal-TCP relabeling** (seated terminal pose of each
+KEEP+inserted demo = target; absorbs grasp offsets; 77 labelable episodes);
+3-D TCP-frame offset head on the shared encoder; frozen-probe first, <2 cm
+near-port gate; deploy wiring replaces the blind ApproachAxisEstimator.
+Implementation agent launched 15:40.
+
+**Launched 15:32:** dual-arm officials campaign — bare v3fix_k16 ×3 (n=3
+confirmation + valid off3; guard neutralized via AIC_GUARDED_MIN_RUNTIME) then
+guarded-on-k16 ×3 (first seat attempt from the best-ever clean 0.05 m
+handoff). Gate: ≥1 insertion event → Track S control-solvable → GuardedInsert
+hardening.

@@ -36,6 +36,11 @@ from aic_example_policies.ros.pose_integration import (
     expand_twists,
     integrate_twist_chunk,
 )
+from aic_example_policies.ros.chunk_ensemble import (
+    DEFAULT_DECAY,
+    ChunkEnsemble,
+    select_exec_twists,
+)
 
 IMG = 128
 
@@ -85,9 +90,18 @@ class DeployACT(Policy):
         self.amean = ck["amean"].to(self.device); self.astd = ck["astd"].to(self.device)
         self.smean = ck["smean"].to(self.device); self.sstd = ck["sstd"].to(self.device)
         self.exec_steps = min(EXEC_STEPS, self.K)
+        # ACT temporal ensembling (arXiv:2304.13705), opt-in via AIC_ENSEMBLE=1.
+        # Read once here at node start (same lifecycle as AIC_CKPT). When unset
+        # the ensemble is None and the execution path is byte-identical to the
+        # plain receding-horizon behavior. Weight decay m via AIC_ENSEMBLE_M.
+        self._ensemble: ChunkEnsemble | None = None
+        if os.environ.get("AIC_ENSEMBLE", "0").strip() == "1":
+            m = float(os.environ.get("AIC_ENSEMBLE_M", str(DEFAULT_DECAY)))
+            self._ensemble = ChunkEnsemble(decay=m)
         self.get_logger().info(
             f"DeployACT loaded {ckpt_path} (K={self.K}) on {self.device}; "
-            f"MODE_POSITION receding horizon exec_steps={self.exec_steps} substeps={SUBSTEPS}"
+            f"MODE_POSITION receding horizon exec_steps={self.exec_steps} substeps={SUBSTEPS}; "
+            f"temporal_ensembling={'ON (m=%g, w_i=exp(-m*i), i=0 oldest)' % self._ensemble.decay if self._ensemble is not None else 'OFF'}"
         )
 
     def _img(self, raw):
@@ -141,6 +155,12 @@ class DeployACT(Policy):
         start = self.time_now()
         budget = Duration(seconds=30.0)
         last_log = 0.0
+        # Absolute frame-step counter for temporal ensembling: chunk from cycle c
+        # starts at abs_step = c*exec_steps and covers [abs_step, abs_step+K-1].
+        # Advanced only when a cycle actually executes (not on a dropped obs).
+        abs_step = 0
+        if self._ensemble is not None:
+            self._ensemble.clear()
         while (self.time_now() - start) < budget:
             obs = get_observation()
             if obs is None:
@@ -150,10 +170,17 @@ class DeployACT(Policy):
             pos0 = np.array([p.position.x, p.position.y, p.position.z])
             quat0 = np.array([p.orientation.x, p.orientation.y,
                               p.orientation.z, p.orientation.w])
-            # Integrate the first exec_steps chunk twists (sub-stepped for
-            # smoothness) into absolute base_link pose targets, re-anchored to
+            # Select the first exec_steps twists to execute. With ensembling OFF
+            # this is chunk[:exec_steps] unchanged; with it ON each executed step
+            # is the exp-weighted average of all buffered chunks covering it
+            # (breaking the near-port zero-velocity attractor). Then integrate
+            # (sub-stepped) into absolute base_link pose targets re-anchored to
             # the measured pose pos0/quat0.
-            fine = expand_twists(chunk[: self.exec_steps], SUBSTEPS)
+            exec_twists = select_exec_twists(
+                self._ensemble, chunk, abs_step, self.exec_steps
+            )
+            abs_step += self.exec_steps
+            fine = expand_twists(exec_twists, SUBSTEPS)
             targets = integrate_twist_chunk(pos0, quat0, fine, dt_fine)
             for tgt in targets:
                 pose = Pose(

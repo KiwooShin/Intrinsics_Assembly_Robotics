@@ -7,6 +7,21 @@ layout matching the oracle demo `~/demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`).
 
 ---
 
+## 2026-07-19 02:45 — 180-s verdict forming: nobody inserts on the matched suite
+
+v2_wide's full-budget run is in: **0/15 insertions** (mean 7.7, officials
+24.8/39.6/33.3 = 97.7) — it leads the officials but its famous insertions did
+NOT reproduce, confirming the matched-seed suite's poses are genuinely harder
+than the exact official eval poses where it scored 119.4. Zero insertions in
+30/30 trials so far splits the picture cleanly: v2_wide best on officials,
+p2_k8 best on stratified approaches (two 35-41 partials where everyone else
+floors), and the last-inch stall is THE unsolved problem across all
+checkpoints and budgets. p1_k16_180 (final run) is at 3/15.
+
+**Next 2 h:** EVALBATCHDONE ~03:50 → full pairwise comparison + analysis
+agent → adoption call (v2_wide stays the submission checkpoint on its proven
+119.4 real-config result) → final 48-h report + dashboard at dawn.
+
 ## 2026-07-19 00:45 — 180-s head-to-head: p2_k8 run done (0/15 insert); control running
 
 The retrain finished in 17 min at 96% GPU (p2_k8 val L1 0.00129, p2_k16

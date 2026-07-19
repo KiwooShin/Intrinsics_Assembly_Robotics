@@ -236,9 +236,9 @@
         experiment verdicts, and the Phase-0 data campaign.</div>
     </div>
     <div class="meta">
-      <div><span class="dot"></span><span class="live">batch valid</span> · Phase-2 staged</div>
+      <div><span class="dot"></span><span class="live">final results in</span> · adoption: v2_wide</div>
       <div>resumed <b>2026-07-17 17:15</b> · ends <b>2026-07-19 17:00</b></div>
-      <div>generated <b>2026-07-18 17:20 PDT</b></div>
+      <div>generated <b>2026-07-19 04:05 PDT</b></div>
     </div>
   </header>
 
@@ -305,6 +305,43 @@
           </tbody>
         </table></div>
       </details>
+    </div>
+  </section>
+
+  <!-- ===== 180S HEAD-TO-HEAD ===== -->
+  <section>
+    <div class="sec-head">
+      <h2>FINAL: 180-s head-to-head · 2026-07-19</h2>
+      <span class="note">Full-budget matched-seed comparison, 15 configs × 3 checkpoints. Adoption decision of the 48-h run.</span>
+    </div>
+    <div class="card">
+      <div class="scroll-x"><table>
+        <thead><tr>
+          <th>Checkpoint</th><th>Verdict</th><th class="num">Mean</th><th class="num">IQM</th>
+          <th class="num">Insert</th><th class="num">Officials Σ/300</th><th>Note</th>
+        </tr></thead>
+        <tbody>
+          <tr><td><b>v2_wide</b> · prior best</td><td><span class="pill ok">ADOPT</span></td>
+              <td class="num">7.75</td><td class="num">1.72</td><td class="num">0/15</td><td class="num">97.7</td>
+              <td>only ckpt with a proven insertion result (119.4 on official cfg)</td></tr>
+          <tr><td><b>p2_k8</b> · 93-ep Phase-2 retrain</td><td><span class="pill warn">Approach-only</span></td>
+              <td class="num">5.29</td><td class="num">3.88</td><td class="num">0/15</td><td class="num">64.9</td>
+              <td>only strata partials (41.5, 34.9); best val L1 0.00129; 3 SC −23</td></tr>
+          <tr><td><b>p1_k16</b> · 60-ep retrain</td><td><span class="pill warn">Approach-only</span></td>
+              <td class="num">3.03</td><td class="num">1.00</td><td class="num">0/15</td><td class="num">68.8</td>
+              <td>3 SC −23 collisions</td></tr>
+        </tbody>
+      </table></div>
+      <div class="banner">
+        <span style="font-size:15px;line-height:1">▲</span>
+        <div><b>0/45 insertions; all pairwise bootstraps inconclusive.</b> The universal failure is a
+          <b>last-inch fixed-point attractor</b>: clean directed approach, then a stall at 0.05–0.08 m
+          for the full 180 s — mode-averaging of the deterministic ACT head toward the demos'
+          zero-velocity endings (arXiv:2304.13705). More data improved approaches (p2's val L1 −40%,
+          strata partials) but not task success. Ranked next levers: last-inch DAgger corrective
+          demos, CVAE latent + temporal ensembling, residual RL (ResiP/RLDG), SC oracle robustness,
+          official-pose eval suite. Full retrospective in SESSION_REPORT.md.</div>
+      </div>
     </div>
   </section>
 
@@ -379,6 +416,20 @@
         <th>Lane</th><th>Experiment</th><th>Verdict</th><th>Key metric / evidence</th>
       </tr></thead>
       <tbody>
+        <tr>
+          <td class="lane">Eval</td>
+          <td><div class="xp-name">180-s head-to-head · 3 checkpoints (07-19)</div>
+              <div class="xp-sub">full-budget adoption decision; last-inch attractor root-caused</div></td>
+          <td><span class="pill warn">0/45 insert</span></td>
+          <td class="num">v2 7.75 &gt; p2_k8 5.29 &gt; p1_k16 3.03 mean · adopt v2_wide</td>
+        </tr>
+        <tr>
+          <td class="lane">Data</td>
+          <td><div class="xp-name">Phase-2 failure-driven collection + P2 retrain (07-18/19)</div>
+              <div class="xp-sub">40 cfgs at floored strata; both K retrained on 93 eps</div></td>
+          <td><span class="pill ok">Done</span></td>
+          <td class="num">33/40 KEEP · val L1 0.00129 (−40% vs p1) · approach gains only</td>
+        </tr>
         <tr>
           <td class="lane">Eval</td>
           <td><div class="xp-name">smoke60 batch · 3 checkpoints (07-18)</div>

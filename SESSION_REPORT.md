@@ -148,3 +148,198 @@ must be confirmed on the in-sim scored suite before adoption.
   canonical metric: in-sim suite score (primary; rliable IQM+CI, arXiv:2108.13264),
   pinned train-manifest hash, fixed budget, both K's, mean of 3 seeds; val-L1 is a
   secondary diagnostic only.
+
+## 2026-07-18 Batch smoke60 — analysis
+
+Analysis sub-agent review of the first fully-valid batch through the hardened
+harness (completed 17:01, `eval_suite_smoke60`, 15 configs = 12 stratified +
+3 official, **internal fast protocol time_limit=60 sim-s**, NOT the official
+180 s). Canonical metric per CLAUDE.md §6 = matched-seed in-sim eval-suite
+score (IQM + bootstrap CI); val-L1 is secondary only. All three checkpoints
+share the same 15 matched-seed configs.
+
+### Summary table (one row per checkpoint)
+
+| Checkpoint (topic) | Verdict | Insertions | Mean [95% CI] | IQM [95% CI] | Outcomes (miss/coll/prox) | Off-limit collisions | Officials sum /300 |
+|---|---|---|---|---|---|---|---|
+| **p1_k16** — new retrain, K=16, 60-ep set (incl 5 SC); best point estimate | FAIL (approach-only; best of 3) | 0/15 | **6.39** [-0.22, 13.27] | **3.76** [-1.67, 11.39] | 8 / 4 / 3 | **2** (cfg_002, cfg_007) | 78.6 |
+| **p1_k8** — new retrain, K=8, same set | FAIL (approach-only) | 0/15 | 5.35 [0.05, 11.41] | 2.85 [1.0, 9.64] | 10 / 2 / 3 | **1** (cfg_007) | 75.1 |
+| **v2_wide** — prior best, known 119.4/300 on official 180 s | FAIL @60s / but known-inserting @180s | 0/15 | 2.78 [-2.01, 7.58] | 1.00 [-1.67, 4.38] | 10 / 3 / 2 | **2** (cfg_002, cfg_009) | 71.3 (was 119.4 @180s) |
+
+Paired bootstraps (all **inconclusive**, CIs include 0): k16−v2 mean +3.61
+[-3.63, 13.83], IQM 0.00 [-0.72, 3.78]; k16−k8 mean +1.04 [-5.56, 8.46], IQM
+-0.16 [-4.08, 4.71]; k8−v2 mean +2.57 [-4.54, 9.68], IQM +1.19 [-4.71, 10.17].
+Point-estimate order k16 > k8 > v2; **none statistically separable.** 8/15
+configs floor at exactly +1.0 on all three checkpoints.
+
+### Score-band decode (what the numbers mean)
+
+Total score at 60 s collapses to three discrete bands, none of which is
+insertion: **collision** (total −23 = tier-1 +1 with a −24 off-limit contact
+penalty; −11 = stratum mean of one −23 + one +1), **miss floor** (+1.0 =
+tier-1 "Model validation succeeded" only; tier-2 and tier-3 both 0 because the
+plug never entered the max bounding radius), **proximity** (+7 … +40 = plug
+reached bounding radius, earned duration/efficiency/smoothness bonuses but
+never seated). Tier-3 reads "Distance computation failed, tf between cable and
+port not found" on every floored trial. **0/45 insertions across the entire
+batch.**
+
+### (a) Insertion-floor effect — the fast protocol currently measures approach quality only
+
+`suite_meta.yaml` states the design assumption: "insertions occur well under
+30 sim-s, so tier-3 signal is preserved" by capping at 60 s. **That assumption
+is false for the current policies.** With 0/45 insertions, tier-3 (the bulk of
+the 100-pt scale) never fires; the metric degenerates to a proxy for "does the
+arm approach the port cleanly without an off-limit contact." Consequence: the
+60 s suite has almost no discriminating power right now — 9/15 configs floor
+identically and every paired bootstrap is inconclusive. IQM in particular is
+pinned near the +1.0 floor (its middle-mass is all misses), so it cannot rank
+these checkpoints; the mean separates them only through the 3 official tails,
+with CIs that span 0.
+
+**Critical caveat vs §6:** the 60 s screen is a legitimate cheap
+regression/screening metric but MUST NOT be the sole adoption gate, and it is
+actively **unfair to slower-but-inserting policies.** Direct evidence:
+v2_wide scored **119.4/300 on the official 180 s eval** but only **71.3/300**
+on the same-family officials here at 60 s — a ~48-pt truncation, with
+official_1 falling from a scoring result to the +1.0 floor. v2's successful
+insertions evidently complete **between 60 and 180 sim-s**, so the 60 s cutoff
+truncates its insertion phase. The point-estimate ranking (k16 > k8 > v2)
+therefore may **invert** at full budget: the p1 retrains lead on *approach*,
+but v2 is the only checkpoint with demonstrated *insertion* capability. Per §6
+("primary = matched-seed suite IQM+CI … prefer mean of 3 seeds"), adoption
+requires the 180 s protocol where insertion can register.
+
+### (b) Officials-vs-strata gap = a yaw/pose *coverage* gap, not officials being OOD-hard
+
+Officials average ~26 pts (k16 26.2, k8 25.0, v2 23.8); the 12 stratified
+configs average ~1.4 pts (k16). The gap is the **reverse** of "officials are
+harder OOD." Mapping totals onto `manifest.csv` board_yaw:
+
+- **Floored (+1.0 miss) cells** cluster at **moderate |yaw| ≈ 0.6–1.5**:
+  cfg_000 (−1.49), cfg_001 (0.84), cfg_003 (0.63), cfg_004 (−1.45),
+  cfg_006 (−0.76), cfg_008 (−1.23), cfg_010 (−0.63), cfg_011 (0.91).
+- **Scoring (proximity) cells + all officials** sit at **extreme |yaw| ≈ 1.3–3.1**:
+  cfg_005 (2.67), cfg_009 (1.29), official_1 (3.10), official_2 (−3.10),
+  official_3 (−1.80).
+
+The boundary is ~|yaw| ≈ 1.3: below it the policy never initiates a correct
+approach (miss); above it it reaches proximity. This exactly confirms the
+prior SESSION_REPORT finding ("gen_config strata yaw U(−π,π) BUG: eval yaws
+cluster in {±3.1, 3.0, −1.8}; yaw≈0 boards are OOD/unreachable"). The 60-ep
+demonstration set covers the extreme-yaw canonical modes (where officials
+live) and undersamples the moderate-yaw band the stratified suite probes.
+Orthogonally, **rail0 fails uniformly** — all four rail0 configs floor or
+collide on all three checkpoints (0 positive scores), independent of yaw.
+Distractors are present in BOTH stratified and official configs (6+
+entity_present per config), so distractors are not the differentiator; pose
+coverage is. This is a textbook behavior-cloning support/coverage failure:
+compounding error off the demonstrated manifold (DAgger, Ross et al. 2011,
+arXiv:1011.0686), and ACT/ALOHA's dependence on dense teleop coverage of the
+target distribution (Zhao et al. 2023, arXiv:2304.13705).
+
+### (c) Collision asymmetry (k16 4 vs k8 2) — mostly an artifact of k16 reaching more ports; genuine off-limit gap is +1 and within noise
+
+`outcome_counts` "collision" flags **any** contact event, conflating two
+different things. Separating them:
+
+- **Genuine off-limit collisions** (tool_link/gripper into a mount housing →
+  −24 penalty → −23 total): **k16 = 2** (cfg_002 nic_card_mount_0, cfg_007
+  nic_card_mount_2), **k8 = 1** (cfg_007), **v2 = 2** (cfg_002, cfg_009).
+- **Near-port glancing contacts during a scoring proximity approach**
+  (still positive total): k16's other two "collisions" are cfg_005 (+15.27,
+  gripper-finger graze) and official_1 (+11.60, tool_link touch on the card
+  link, not the off-limit housing). These occur **because k16 reaches
+  proximity on more configs** (e.g. cfg_009 +40, official_1 +12 where k8
+  floors at +1) — more approaches mechanically create more grazing
+  opportunities near the port.
+
+So the headline 4-vs-2 overstates the effect. The genuine off-limit delta is
+k16 2 vs k8 1 — one config (n=1 seed, 15 configs) — and the per-config picture
+is non-monotone (cfg_002: k16+v2 collide, k8 misses; cfg_007: k16+k8 collide,
+v2 misses; cfg_009: v2 collides, k16 gets +40). The longer K=16 open-loop
+horizon (16 actions between observations vs 8) is a **plausible** mechanism for
+reduced reactivity → overshoot into contact, consistent with the chunking
+trade-off (larger chunk lowers re-planning/compounding error but raises
+open-loop drift; ACT arXiv:2304.13705; BID arXiv:2408.17355; arXiv:2507.09061),
+but the data **cannot adjudicate it** at this sample size. Verdict: collision
+asymmetry not established.
+
+### (d) Harness-health checks — both prior failure modes are ABSENT (positive validation of the hardened harness)
+
+- **DeployACT startup latency / first-trial cfg_000 GetState-teardown hang: NOT
+  reproduced.** `/aic_model/get_state` is available promptly and lifecycle
+  `configure` takes a **uniform ~6 s on every trial** (cfg_000, cfg_001,
+  official_3 all ≈6 s: configured ~6 s after "Configuring…"). The previously
+  documented first-trial hang does not appear; startup is not a confound in
+  this batch. Per-trial wall time is ~5.8–6.5 min (≈300–390 s of active rollout
+  for 60 sim-s, i.e. ~5× real-time), stable across the run.
+- **p1 joint-bound spikes: NOT observed.** `JointSaturationLimiter` is
+  configured for all arm joints (wrist ±6.283, elbow ±3.142) and gripper, but
+  there are **no saturation/out-of-range/violation events** in any run.log —
+  only the limiter setup INFO lines. Note: because the saturation limiter
+  clamps silently, open-loop overshoot would manifest as the arm stalling at a
+  clamped pose rather than a logged spike, which is consistent with the miss
+  floor (arm drives toward an undertrained target and stops short).
+
+### (e) Literature alignment
+
+- **Coverage / OOD floor (primary root cause):** DAgger (Ross, Gordon, Bagnell,
+  "A Reduction of Imitation Learning…", arXiv:1011.0686) — BC error compounds
+  off the demonstrated support; the fix is targeted data aggregation at the
+  states the learner actually visits. HG-DAgger (Kelly et al., arXiv:1810.02890)
+  for human-gated aggregation on failure states. ACT/ALOHA (Zhao et al.,
+  arXiv:2304.13705) and Diffusion Policy (Chi et al., arXiv:2303.04137) both
+  depend on dense demonstration coverage of the deployment distribution — 60
+  episodes over a U(−π,π)×wide-x/y domain is far too sparse, matching the
+  moderate-yaw floor we observe.
+- **Chunk length / open-loop horizon (collision hypothesis):** ACT action
+  chunking (arXiv:2304.13705) trades compounding error against open-loop drift;
+  BID / bidirectional decoding (arXiv:2408.17355) and arXiv:2507.09061 show
+  longer chunks aid open-loop stability but reduce reactivity — the qualitative
+  frame for k16's marginally higher off-limit contact count, though our n=1 can't
+  confirm it.
+- **Metric methodology:** rliable IQM + stratified bootstrap CIs (Agarwal et al.,
+  arXiv:2108.13264) — exactly why we report IQM+CI; the batch shows why n=1 seed
+  with a floored middle-mass yields inconclusive CIs.
+
+### Recommendations for the remaining ~24 h
+
+**1. Run the 180 s full-budget eval overnight — but as a matched-seed
+HEAD-TO-HEAD, not p1_k16 alone.** Include **p1_k16 AND v2_wide** (add p1_k8 if
+budget allows). Rationale: the 60 s screen truncated v2's known insertions
+(119.4→71.3 on officials); comparing a 180 s p1_k16 against a 60 s-crippled v2
+would be invalid. Only at 180 s can tier-3 insertion register and settle whether
+p1_k16's approach lead converts to actual insertions or whether v2's insertion
+capability wins. Budget: ~15 min/trial × 15 = ~3.75 h/checkpoint → k16+v2 ≈
+7.5 h, +k8 ≈ 11 h — fits comfortably overnight. Pin the manifest hash, config
+(K, epoch budget), and seed set on every row (§6). **Launch as a detached,
+resumable script with a DONE marker per §6 agent-waiter ban.**
+
+**2. Phase-2 failure-driven collection targets the floored cells (DAgger-style),
+prioritized:**
+   - **P1 — rail0 (highest):** all four rail0 cells fail on every checkpoint.
+     Collect both plugs (SFP+SC) × both ports at rail0. **~16–20 demos.**
+   - **P2 — moderate-yaw band |yaw| ∈ [0.5, 1.5], port0 emphasis, rails 1–2:**
+     the undersampled band that floors (cfg_004, 006, 008, 010, 011).
+     **~16–20 demos.**
+   - **P3 — the 2 off-limit-collision cells** cfg_002 (rail0_SC, yaw 1.32) and
+     cfg_007 (rail1_SC, yaw 2.84): clean contact-free approach demos to teach
+     avoidance. **~6–8 demos.**
+   - **Method:** seed each demo at the exact failed board pose from
+     `manifest.csv` (replay cfg_000/003/004/006/008/010/011 + cfg_002/007
+     poses) ± a small neighborhood (±0.05 rad yaw, ±1 cm x/y, grasp_z within
+     the [0.040, 0.046] band), ~4–6 demos/cell. **Total ≈ 40–48 demos** roughly
+     doubling effective coverage in the failed region. Then retrain (both K=8
+     and K=16 per §6), re-screen on the 60 s suite for regression, and 180 s
+     eval the winner.
+
+**3. Keep the 60 s suite as a cheap screening/regression gate only** (it detects
+gross approach regressions fast), but record adoption decisions on the 180 s
+matched-seed IQM+CI, mean of ≥3 seeds where feasible (§6). Do NOT adopt on the
+60 s point estimates — they rank approach quality, not task success.
+
+Note: 0/45 insertions means neither p1 retrain has yet matched v2's known
+insertion capability; the SC branch and the moderate-yaw coverage hole remain
+the two highest-value fixes (consistent with the prior SC-oracle and yaw-bug
+findings in this report).

@@ -1,41 +1,71 @@
-# AI for Industry Challenge Toolkit
+# Camera-Only Imitation Learning for Robotic Cable Insertion
+
+**A learned visuomotor policy that inserts SFP/SC fiber-optic plugs into NIC ports with a UR5e — from RGB cameras only, no ground-truth poses, no depth.**
+Built on the [Intrinsic AI for Industry Challenge](https://www.intrinsic.ai/events/ai-for-industry-challenge) toolkit (Gazebo simulation, real contact physics, force-aware scoring). This fork adds the full research pipeline: oracle distillation, ACT-style policy learning, a hardened evaluation harness, and a statistics-first experiment log.
+
+## Demos
+
+| Scripted oracle — a full SFP insertion (the task) | Learned policy — camera-only rollout |
+|:---:|:---:|
+| ![Oracle demo: complete SFP insertion](docs/media/oracle_demo_sfp_rail0_sfp_port_0.gif) | ![Learned policy rollout on official_1](docs/media/policy_p1_k16_official_1.gif) |
+| `CheatCode` oracle (reads ground-truth port poses) seats the plug — engine score ≈93/100. This is the teacher and the per-trial upper bound. | ACT policy (3 RGB cams + TCP state, ~0.75 M params) drives a clean approach on an official evaluation config. 2.5× speed, three-camera view. |
+
+*GIFs are 2.5× timelapses of the full episodes.*
+
+## Results
+
+| Evaluation | Score | Notes |
+|---|---:|---|
+| **Best official-config eval (3 trials, /300)** | **119.4** | adopted checkpoint `v2_wide`, **with successful insertions** on the official poses |
+| Oracle (scripted, ground-truth poses) | ≈93 / 100 per trial | distillation teacher; 97.5 % keep-rate over a 40-config collection campaign |
+| 180-s matched-seed suite, 15 configs (mean) | v2_wide 7.75 · p2_k8 5.29 · p1_k16 3.03 | harder stratified poses; officials-only sums: 97.7 / 64.9 / 68.8 (/300) |
+| Unit tests | 295 green | pure-logic seams for config gen, dataset prep, chunk ensembling, eval harness |
+
+**The central research finding:** on poses harder than the official ones, every checkpoint approaches cleanly and then stalls 0.05–0.08 m from the port for the full trial — a **last-inch fixed-point attractor** caused by mode-averaging of a deterministic ACT head toward the demos' zero-velocity endings ([Zhao et al., 2023, arXiv:2304.13705](https://arxiv.org/abs/2304.13705)). The ranked fixes (last-inch DAgger, CVAE action head, residual RL — [ResiP](https://arxiv.org/abs/2407.16677) / [RLDG](https://arxiv.org/abs/2412.09858)) are laid out in [SESSION_REPORT.md](./SESSION_REPORT.md).
+
+**The evaluation-rigor finding:** identical config + seed trials vary by **σ ≈ 3–18 points** run-to-run (Gazebo/ROS timing nondeterminism), enough to flip trial outcomes. A promising single-run A/B result (temporal ensembling, "+3.9, wins on 5/5 configs") was **overturned** by a 15-config paired-bootstrap confirmation and a 3-repetitions-per-arm experiment (30 trials): no real effect, added variance. All adoption decisions here are therefore CI-backed at n≥3 — the negative result and the noise-floor measurement are documented as first-class deliverables.
+
+## Method
+
+```
+gen_config.py                 # stratified randomized scene configs (rail × plug × port × yaw band)
+  └─ collect_campaign.sh      # CheatCode oracle rollouts → rosbags (resumable, score-gated keeps)
+       └─ prepare_dataset.py  # bag → synced .npy episodes (3 cams + TCP state, task-window trimmed)
+            └─ train_v3       # ACT-style CNN + action chunking (K×6 TCP-velocity chunks, ~17 min/run)
+                 └─ DeployACT # receding-horizon MODE_POSITION execution @ ~18 Hz
+eval_suite.py + eval_batch.sh # matched-seed suites, IQM + paired-bootstrap CIs, resumable batches
+```
+
+- **Observation → action:** 3 RGB cameras + 7-D TCP state → chunk of K×6 TCP velocities; execute the first 4 actions, re-predict (receding horizon).
+- **Why image-based ACT (not point-cloud DP3):** the sim bridges RGB only — no depth topics.
+- **Deployment insight that unlocked scoring:** the stock velocity mode integrates its reference open-loop and freezes the arm; re-anchoring every chunk through position-mode targets took the score from 36 → 119.4.
+- **Dataset:** 93 oracle episodes across stratified + failure-driven collection phases.
+
+## Engineering highlights
+
+- **Resumable, self-healing eval harness** — flock-guarded batches, orphan sweeps, skip-if-done resume, DONE markers; survived a 48 h autonomous run with a 5-minute liveness watchdog.
+- **Statistics-first protocol** — matched-seed suites, IQM + paired-bootstrap CIs, measured sim noise floor, n≥3 repetition rule codified after it overturned a false positive.
+- **295 unit tests** (stdlib `unittest`, no ROS/GPU needed) over every pure-logic seam.
+- **Full lab notebook** — [`SESSION_REPORT.md`](./SESSION_REPORT.md) records every experiment with tables, verdicts, and paper citations; [`progress.md`](./progress.md) is the 2-hourly run log.
+
+## Where to look
+
+| File | What it is |
+|---|---|
+| [`SESSION_REPORT.md`](./SESSION_REPORT.md) | The lab notebook: every experiment, result table, and adoption decision |
+| [`Plan.md`](./Plan.md) / [`ResearchPlan.md`](./ResearchPlan.md) | Architecture rationale and research plan |
+| [`aic_example_policies/.../DeployACT.py`](./aic_example_policies/aic_example_policies/ros/DeployACT.py) | The deployed policy node (receding horizon + opt-in chunk ensembling) |
+| [`eval_suite.py`](./eval_suite.py), [`eval_batch.sh`](./eval_batch.sh) | Matched-seed evaluation suites + resumable batch runner |
+| [`train_smoke.py`](./train_smoke.py), [`prepare_dataset.py`](./prepare_dataset.py) | Training and dataset pipeline |
+
+---
+
+# AI for Industry Challenge Toolkit (upstream)
 
 [![build](https://github.com/intrinsic-dev/aic/actions/workflows/build.yml/badge.svg)](https://github.com/intrinsic-dev/aic/actions/workflows/build.yml)
 [![style](https://github.com/intrinsic-dev/aic/actions/workflows/style.yml/badge.svg)](https://github.com/intrinsic-dev/aic/actions/workflows/style.yml)
 
-![](../media/aic_banner.png)
-
-The **AI for Industry Challenge** is an open competition for developers and roboticists aimed at solving some of the hardest, high-impact problems in robotics and manufacturing.
-
-This repository contains the official toolkit to help participants start developing their solutions. For registration details, official rules, and FAQs, please visit the [AI for Industry Challenge event page](https://www.intrinsic.ai/events/ai-for-industry-challenge).
-
----
-
-## 🚧 Participant Solution (this fork)
-
-> This fork adds an **imitation-learning pipeline** on top of the official toolkit. It distills the provided `CheatCode` oracle policy (which reads ground-truth port poses) into a **camera-only ACT policy** for the SFP/SC cable-insertion task. Full plan and rationale: [Plan.md](./Plan.md).
-
-**Why ACT (not point-cloud DP3):** the sim bridges **RGB only** (no depth topics), so the policy is image-based: 3 cameras + TCP state → action chunk of TCP velocities.
-
-**Pipeline:**
-
-```
-gen_config.py        # randomized scene configs near the eval distribution
-   └─ collect_one.sh / collect_set.sh   # run CheatCode (ground truth) → record bag (correct scoring detection)
-        └─ prepare_dataset.py            # bag → .npy, sync 3 cams + state, TRIM to the task window
-             └─ train_smoke.py           # ACT-style policy (CNN encoders + action chunking) on GPU
-   verify_dataset.py / make_video.py     # dataset sanity checks + insertion video
-```
-
-**Key gotchas captured here (so they aren't re-learned):**
-- CheatCode scores ~93/100 — detect success via the engine line `Trial '…' completed successfully! Score:`, **not** the strings the older scripts grepped for.
-- Episodes must be **trimmed** to `[first pose_command, last + 0.3s]` to drop pre-task idle and the post-task reset.
-- Raw bags are ~8 GB each; **delete after converting** to trimmed `.npy` episodes (~500 MB).
-- Gazebo rendering needs TigerVNC on display `:2`; effective camera rate is ~3.6 Hz.
-
-See [Plan.md → Progress Log](./Plan.md#progress-log--data--training-pipeline-2026-06-17--06-18) for current status and next steps.
-
----
+The **AI for Industry Challenge** is an open competition for developers and roboticists aimed at solving some of the hardest, high-impact problems in robotics and manufacturing. This repository contains the official toolkit; for registration details, official rules, and FAQs, visit the [event page](https://www.intrinsic.ai/events/ai-for-industry-challenge).
 
 ## Toolkit Guide
 

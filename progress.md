@@ -7,6 +7,20 @@ layout matching the oracle demo `~/demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`).
 
 ---
 
+## 2026-07-18 22:30 — Phase-2 COMPLETE (33/40 KEEP); dataset at 77 episodes
+
+The failure-driven campaign finished cleanly at 22:28: **33 KEEPs** (30 SFP at
+oracle 93.4–94.0 covering every floored stratum, 3 SC at 93.8–94.1) with 7
+drops concentrated in SC (3/8 keep-rate under eval-band yaw — two failure
+modes logged in SESSION_REPORT: the −0.005 floor partial-inserts and poor
+approaches on some eval-band SC poses; micro-tune is top follow-up). Dataset
+is now **77 episodes** (69 SFP + 8 SC, all wrench/joints); sim confirmed
+clean, zero harness incidents across the entire 5-hour campaign.
+
+**Next 2 h:** retrain both K on ds_phase0+ds_phase2 (shift-aug winners, GPU-
+verified) → launch the overnight 180-s matched-seed head-to-head (p2 winner +
+p1_k16 + v2_wide on eval_suite_smoke) that decides the run's final model.
+
 ## 2026-07-18 20:20 — Phase-2 collection past halfway; SC floor is pose-dependent
 
 Collection is at 25/40 with 21 KEEPs (SFP oracle 93.4–94.0, zero SFP failures

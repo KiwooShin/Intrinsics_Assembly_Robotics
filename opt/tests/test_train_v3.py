@@ -12,7 +12,9 @@ from opt.tests import _pathfix  # noqa: F401
 
 try:
     import torch
+    import torch.nn.functional as F
 
+    import train_v2 as tv2
     from opt import train_v3
     from opt.config import TrainConfig
 
@@ -73,6 +75,117 @@ class OptimizerTest(unittest.TestCase):
         # fused=True requested but CPU has no CUDA -> plain/foreach AdamW.
         opt = train_v3.build_optimizer(m, lr=1e-3, weight_decay=1e-4, fused=True)
         self.assertIsInstance(opt, torch.optim.AdamW)
+
+
+@unittest.skipUnless(_HAS_TORCH, "torch not available")
+class WeightedLossInvariantTest(unittest.TestCase):
+    """The push-in weighted loss reduces to the plain mean L1 at uniform weights."""
+
+    def test_uniform_weights_equal_mean_l1(self) -> None:
+        torch.manual_seed(0)
+        pred = torch.randn(8, 5, 6)
+        target = torch.randn(8, 5, 6)
+        w = torch.ones(8)
+        per_frame = (pred - target).abs().mean(dim=(1, 2))
+        weighted = (per_frame * w).sum() / w.sum()
+        self.assertAlmostEqual(
+            float(weighted), float(F.l1_loss(pred, target)), places=5
+        )
+
+    def test_weighting_up_weights_final_frames(self) -> None:
+        # Final frame has large error; up-weighting it must raise the loss.
+        pred = torch.zeros(3, 2, 6)
+        target = torch.zeros(3, 2, 6)
+        target[-1] = 10.0  # big error only on the last frame
+        per_frame = (pred - target).abs().mean(dim=(1, 2))
+        uniform = (per_frame * torch.ones(3)).sum() / 3.0
+        ramp = torch.tensor([1.0, 1.0, 4.0])
+        weighted = (per_frame * ramp).sum() / ramp.sum()
+        self.assertGreater(float(weighted), float(uniform))
+
+
+@unittest.skipUnless(_HAS_TORCH, "torch not available")
+class ThirteenDimForwardTest(unittest.TestCase):
+    """A 13-D-state policy trains end-to-end on CPU (dry-run shape check)."""
+
+    def test_forward_and_weighted_backward_cpu(self) -> None:
+        k = 4
+        model = tv2.Policy(k, state_dim=13)
+        imgs = torch.rand(6, 3, 3, 32, 32)  # (B, cams, C, H, W)
+        state = torch.randn(6, 13)          # 7-D pose + 6-D wrench
+        target = torch.randn(6, k, 6)
+        weights = torch.linspace(1.0, 4.0, 6)
+        pred = model(imgs, state)
+        self.assertEqual(tuple(pred.shape), (6, k, 6))
+        per_frame = (pred - target).abs().mean(dim=(1, 2))
+        loss = (per_frame * weights).sum() / weights.sum()
+        loss.backward()  # gradients must flow through the 13-D head
+        head0 = model.head[0]
+        self.assertEqual(head0.in_features, 128 * 3 + 13)
+        self.assertIsNotNone(head0.weight.grad)
+        self.assertTrue(torch.isfinite(head0.weight.grad).all())
+
+    def test_seven_dim_default_unchanged(self) -> None:
+        model = tv2.Policy(4)  # default state_dim=7
+        self.assertEqual(model.head[0].in_features, 128 * 3 + 7)
+
+
+@unittest.skipUnless(_HAS_TORCH, "torch not available")
+class ArgParseTest(unittest.TestCase):
+    """CLI flags map onto the opt-in TrainConfig fields."""
+
+    def test_flags_off_by_default(self) -> None:
+        cfg = train_v3._parse_args(["--epochs", "1"])
+        self.assertFalse(cfg.tail_trim)
+        self.assertFalse(cfg.use_wrench)
+        self.assertEqual(cfg.pushin_weight, 1.0)
+        self.assertEqual(cfg.state_dim, 7)
+
+    def test_all_fixes_on(self) -> None:
+        cfg = train_v3._parse_args([
+            "--epochs", "1", "--tail-trim", "--wrench",
+            "--pushin-weight", "4", "--shift-pad", "6", "--pushin-ramp-s", "2",
+        ])
+        self.assertTrue(cfg.tail_trim)
+        self.assertTrue(cfg.use_wrench)
+        self.assertEqual(cfg.state_dim, 13)
+        self.assertEqual(cfg.pushin_weight, 4.0)
+        self.assertTrue(cfg.pushin_enabled)
+        self.assertEqual(cfg.shift_pad, 6)
+
+
+@unittest.skipUnless(_HAS_CUDA, "CUDA required: _load_split loads to GPU")
+class LoadSplitIntegrationTest(unittest.TestCase):
+    """_load_split wires wrench/trim/weights onto real GPU tensors."""
+
+    def _smoke_dirs(self) -> list[str]:
+        import glob
+
+        return sorted(glob.glob("/home/kiwoos/training/smoke/ep_*"))
+
+    def test_wrench_widens_state_and_trim_shrinks(self) -> None:
+        dirs = self._smoke_dirs()
+        if not dirs:
+            self.skipTest("smoke dataset not present")
+        base = TrainConfig(train_globs=",".join(dirs), val_globs="",
+                           img=96, k=8, compile_mode="none")
+        _, st_base, _, w_base = train_v3._load_split(dirs, base, apply_prep=True)
+        self.assertEqual(st_base.shape[1], 7)
+        self.assertIsNone(w_base)  # no weighting by default
+
+        fixed = TrainConfig(
+            train_globs=",".join(dirs), val_globs="", img=96, k=8,
+            compile_mode="none", tail_trim=True, use_wrench=True,
+            pushin_weight=4.0,
+        )
+        imf, st_f, act_f, w_f = train_v3._load_split(dirs, fixed, apply_prep=True)
+        self.assertEqual(st_f.shape[1], 13)  # 7-D pose + 6-D wrench
+        self.assertIsNotNone(w_f)
+        self.assertEqual(w_f.shape[0], imf.shape[0])
+        self.assertEqual(imf.shape[0], act_f.shape[0])
+        # Trimming never adds frames; on demos with a seated tail it removes some.
+        self.assertLessEqual(imf.shape[0], st_base.shape[0])
+        self.assertGreaterEqual(float(w_f.max()), 1.0)
 
 
 @unittest.skipUnless(_HAS_CUDA, "CUDA required for end-to-end training")

@@ -46,6 +46,23 @@ class TrainConfig:
         proprio_dropout: Per-sample probability of zeroing the normalized state
             during training only (0 disables). See opt.augment.proprio_dropout
             (arXiv:2509.18644); eval/deploy always keeps the true state.
+        tail_trim: Drop each demo's seated zero-velocity tail from the training
+            sequence (non-destructive; the ``.npy`` files are never rewritten).
+            Removes frames that alias the near-port approach. Off = legacy path.
+        tail_trim_threshold: Linear-speed threshold (m/s) below which a trailing
+            frame is treated as "stopped" for :func:`terminal_tail_trim_length`.
+        tail_trim_margin_s: Seconds of frames kept after the last moving frame,
+            so a short "arrived" cue survives the trim.
+        use_wrench: Concatenate the 6-D wrist wrench onto the 7-D TCP state,
+            training a 13-D-state policy. The checkpoint records ``state_dim`` so
+            DeployACT can append the live wrench. Off = 7-D legacy state.
+        pushin_weight: Peak per-frame loss weight for the final push-in phase
+            (``1.0`` disables weighting = uniform L1, the legacy path).
+        pushin_ramp_s: Seconds of frames over which the loss weight ramps from
+            ``1.0`` up to ``pushin_weight`` before each (trimmed) episode end.
+        dt_frame: Recording frame period (s) used to convert ``tail_trim_margin_s``
+            / ``pushin_ramp_s`` to frame counts. Matches DeployACT's ``DT_FRAME``
+            (~3.64 Hz, ds_wide median 0.275 s).
     """
 
     train_globs: str = DEFAULT_TRAIN_EPS
@@ -64,6 +81,13 @@ class TrainConfig:
     out: str = ""
     shift_pad: int = 0
     proprio_dropout: float = 0.0
+    tail_trim: bool = False
+    tail_trim_threshold: float = 0.003
+    tail_trim_margin_s: float = 0.3
+    use_wrench: bool = False
+    pushin_weight: float = 1.0
+    pushin_ramp_s: float = 2.0
+    dt_frame: float = 0.275
 
     def __post_init__(self) -> None:
         """Validate hyperparameters at the public boundary.
@@ -89,11 +113,35 @@ class TrainConfig:
             raise ValueError(
                 f"proprio_dropout must be in [0, 1], got {self.proprio_dropout}"
             )
+        if self.tail_trim_threshold < 0.0:
+            raise ValueError(
+                f"tail_trim_threshold must be >= 0, got {self.tail_trim_threshold}"
+            )
+        if self.tail_trim_margin_s < 0.0:
+            raise ValueError(
+                f"tail_trim_margin_s must be >= 0, got {self.tail_trim_margin_s}"
+            )
+        if self.pushin_weight < 1.0:
+            raise ValueError(f"pushin_weight must be >= 1, got {self.pushin_weight}")
+        if self.pushin_ramp_s < 0.0:
+            raise ValueError(f"pushin_ramp_s must be >= 0, got {self.pushin_ramp_s}")
+        if self.dt_frame <= 0.0:
+            raise ValueError(f"dt_frame must be > 0, got {self.dt_frame}")
 
     @property
     def ema_enabled(self) -> bool:
         """Whether EMA-of-weights evaluation is active."""
         return self.ema_decay > 0.0
+
+    @property
+    def state_dim(self) -> int:
+        """Proprioceptive state width: 7 (TCP pose) or 13 (pose + 6-D wrench)."""
+        return 13 if self.use_wrench else 7
+
+    @property
+    def pushin_enabled(self) -> bool:
+        """Whether push-in loss weighting is active (peak weight > 1)."""
+        return self.pushin_weight > 1.0
 
 
 @dataclasses.dataclass(frozen=True)

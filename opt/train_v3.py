@@ -45,6 +45,7 @@ import torch.nn.functional as F  # noqa: E402
 
 import train_v2 as tv2  # noqa: E402  (repo-root module)
 from opt import augment  # noqa: E402
+from opt import episode_prep  # noqa: E402
 from opt.config import TrainConfig, TrainResult  # noqa: E402
 
 _LOG = logging.getLogger("opt.train_v3")
@@ -175,6 +176,69 @@ def build_optimizer(
         )
 
 
+def _load_split(
+    dirs: list[str], cfg: TrainConfig, apply_prep: bool
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """Load a set of episodes to GPU tensors with the opt-in demo fixes applied.
+
+    Reuses ``train_v2.load_all`` for the (heavy) GPU image/state/action loading,
+    then optionally: concatenates the 6-D wrench onto the state (``cfg.use_wrench``
+    -> 13-D), trims each episode's seated zero-velocity tail, and computes per-frame
+    push-in loss weights. Trimming/weighting are applied only to the training split
+    (``apply_prep``); the validation split keeps every frame so its diagnostic
+    metric stays comparable across runs. With every flag off the returned tensors
+    are exactly ``load_all``'s output and ``weights`` is ``None`` (legacy path).
+
+    Args:
+        dirs: Episode directories to load.
+        cfg: Training configuration (its flags decide wrench/trim/weighting).
+        apply_prep: Whether to apply tail-trim + push-in weighting (train only).
+
+    Returns:
+        ``(imgs, state, act, weights)`` where ``state`` is ``(N, cfg.state_dim)``
+        and ``weights`` is a ``(N,)`` per-frame loss-weight tensor, or ``None``
+        when push-in weighting is disabled (caller uses the plain mean L1).
+    """
+    if cfg.use_wrench:
+        imgs, state, act, epid, extra = tv2.load_all(
+            dirs, cfg.img, cfg.k, load_extra=True
+        )
+        missing = int((~extra.has_wrench).sum().item())
+        if missing:
+            _LOG.warning(
+                "%d/%d frames lack wrenches.npy; zero-filled. Deploy still sends "
+                "the live wrench, but check the dataset if this is unexpected.",
+                missing, state.shape[0],
+            )
+        state = torch.cat([state, extra.wrench], dim=1)  # (N, 13)
+    else:
+        imgs, state, act, epid = tv2.load_all(dirs, cfg.img, cfg.k)
+
+    weights: torch.Tensor | None = None
+    if apply_prep and (cfg.tail_trim or cfg.pushin_enabled):
+        margin = episode_prep.seconds_to_frames(
+            cfg.tail_trim_margin_s, cfg.dt_frame, minimum=0
+        )
+        ramp = episode_prep.seconds_to_frames(cfg.pushin_ramp_s, cfg.dt_frame)
+        epid_np = epid.detach().cpu().numpy()
+        # act[:, 0] is each frame's own twist (chunk step 0 has no clamping),
+        # i.e. the raw tcp_velocity used for the m/s trim threshold.
+        vel_np = act[:, 0].detach().cpu().float().numpy()
+        keep_np, w_np = episode_prep.build_keep_and_weights(
+            epid_np, vel_np,
+            tail_trim=cfg.tail_trim,
+            trim_threshold=cfg.tail_trim_threshold,
+            trim_margin_frames=margin,
+            pushin_ramp_frames=ramp,
+            pushin_weight=cfg.pushin_weight,
+        )
+        keep = torch.from_numpy(keep_np).to(imgs.device)
+        imgs, state, act = imgs[keep], state[keep], act[keep]
+        if cfg.pushin_enabled:
+            weights = torch.from_numpy(w_np[keep_np]).to(state.device)
+    return imgs, state, act, weights
+
+
 def train(cfg: TrainConfig) -> TrainResult:
     """Train an ACT-lite policy per ``cfg`` and return its result record.
 
@@ -198,10 +262,10 @@ def train(cfg: TrainConfig) -> TrainResult:
     if not train_dirs:
         raise FileNotFoundError(f"no training episodes match {cfg.train_globs!r}")
 
-    imt, stt, act_t, _ = tv2.load_all(train_dirs, cfg.img, cfg.k)
+    imt, stt, act_t, w_t = _load_split(train_dirs, cfg, apply_prep=True)
     if val_dirs:
-        imv, stv, act_v, _ = tv2.load_all(val_dirs, cfg.img, cfg.k)
-    else:  # overfit mode: validate on the training data.
+        imv, stv, act_v, _ = _load_split(val_dirs, cfg, apply_prep=False)
+    else:  # overfit mode: validate on the (prepared) training data.
         imv, stv, act_v = imt, stt, act_t
 
     smean, sstd = stt.mean(0), stt.std(0) + 1e-6
@@ -209,7 +273,7 @@ def train(cfg: TrainConfig) -> TrainResult:
     stt_n, stv_n = (stt - smean) / sstd, (stv - smean) / sstd
     act_t_n, act_v_n = (act_t - amean) / astd, (act_v - amean) / astd
 
-    model = tv2.Policy(cfg.k).to(DEVICE)
+    model = tv2.Policy(cfg.k, state_dim=cfg.state_dim).to(DEVICE)
     fp8_active = maybe_enable_fp8(model, cfg.use_fp8)
     runnable = model
     if cfg.compile_mode != "none":
@@ -224,7 +288,9 @@ def train(cfg: TrainConfig) -> TrainResult:
 
     n_train = imt.shape[0]
 
-    def run_epoch(images, states, actions, train_flag: bool) -> float:
+    def run_epoch(
+        images, states, actions, train_flag: bool, weights=None
+    ) -> float:
         runnable.train(train_flag)
         n = images.shape[0]
         idx = (
@@ -243,7 +309,12 @@ def train(cfg: TrainConfig) -> TrainResult:
                     st_b = augment.proprio_dropout(st_b, cfg.proprio_dropout, aug_gen)
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 pred = runnable(img_b, st_b)
-                loss = F.l1_loss(pred, actions[b])
+                if weights is None:
+                    loss = F.l1_loss(pred, actions[b])
+                else:  # push-in weighting: per-frame weighted mean of per-frame L1
+                    per_frame = (pred - actions[b]).abs().mean(dim=(1, 2))
+                    w_b = weights[b]
+                    loss = (per_frame * w_b).sum() / w_b.sum()
             if train_flag:
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
@@ -276,7 +347,7 @@ def train(cfg: TrainConfig) -> TrainResult:
     best_first, best_chunk = float("inf"), float("inf")
     final_chunk = 0.0
     for ep in range(cfg.epochs):
-        final_train_loss = run_epoch(imt, stt_n, act_t_n, True)
+        final_train_loss = run_epoch(imt, stt_n, act_t_n, True, weights=w_t)
         if ep % 5 == 0 or ep == cfg.epochs - 1:
             if ema is not None:
                 ema.apply_to(model)
@@ -311,6 +382,11 @@ def train(cfg: TrainConfig) -> TrainResult:
                 "sstd": sstd.cpu(),
                 "K": cfg.k,
                 "img": cfg.img,
+                # State dimensionality so DeployACT rebuilds the matching head and
+                # (for 13-D) appends the live wrench. Old checkpoints lack these
+                # keys; DeployACT defaults to 7-D / no-wrench when absent.
+                "state_dim": cfg.state_dim,
+                "use_wrench": cfg.use_wrench,
             },
             out_path,
         )
@@ -361,12 +437,31 @@ def _parse_args(argv: list[str] | None = None) -> TrainConfig:
                     help="DrQ random-shift radius in px on train images (0=off).")
     ap.add_argument("--proprio-dropout", type=float, default=TrainConfig.proprio_dropout,
                     help="Per-sample state-zeroing probability on train (0=off).")
+    ap.add_argument("--tail-trim", dest="tail_trim", action="store_true",
+                    help="Trim each demo's seated zero-velocity tail (train only).")
+    ap.add_argument("--tail-trim-threshold", type=float,
+                    default=TrainConfig.tail_trim_threshold,
+                    help="Linear-speed (m/s) below which a trailing frame is stopped.")
+    ap.add_argument("--tail-trim-margin-s", type=float,
+                    default=TrainConfig.tail_trim_margin_s,
+                    help="Seconds of frames kept after the last moving frame.")
+    ap.add_argument("--wrench", dest="use_wrench", action="store_true",
+                    help="Append the 6-D wrist wrench to the state (7-D -> 13-D).")
+    ap.add_argument("--pushin-weight", type=float, default=TrainConfig.pushin_weight,
+                    help="Peak push-in loss weight W (1.0=off / uniform L1).")
+    ap.add_argument("--pushin-ramp-s", type=float, default=TrainConfig.pushin_ramp_s,
+                    help="Seconds of frames over which the loss weight ramps to W.")
+    ap.add_argument("--dt-frame", type=float, default=TrainConfig.dt_frame,
+                    help="Recording frame period (s) for seconds->frames conversion.")
     a = ap.parse_args(argv)
     return TrainConfig(
         train_globs=a.train_globs, val_globs=a.val_globs, epochs=a.epochs, bs=a.bs,
         lr=a.lr, weight_decay=a.weight_decay, img=a.img, k=a.k, ema_decay=a.ema_decay,
         compile_mode=a.compile_mode, fused_adam=a.fused_adam, use_fp8=a.use_fp8,
         seed=a.seed, out=a.out, shift_pad=a.shift_pad, proprio_dropout=a.proprio_dropout,
+        tail_trim=a.tail_trim, tail_trim_threshold=a.tail_trim_threshold,
+        tail_trim_margin_s=a.tail_trim_margin_s, use_wrench=a.use_wrench,
+        pushin_weight=a.pushin_weight, pushin_ramp_s=a.pushin_ramp_s, dt_frame=a.dt_frame,
     )
 
 
@@ -378,6 +473,11 @@ def main(argv: list[str] | None = None) -> None:
     print(
         f"[train_v3] frames={res.frames} train={res.train_frames} val={res.val_frames} "
         f"epochs={res.epochs} compile={res.compile_mode} fp8={res.fp8_active}"
+    )
+    print(
+        f"[train_v3] fixes: tail_trim={cfg.tail_trim}(thr={cfg.tail_trim_threshold} "
+        f"margin={cfg.tail_trim_margin_s}s) state_dim={cfg.state_dim} "
+        f"pushin_W={cfg.pushin_weight}(ramp={cfg.pushin_ramp_s}s) shift_pad={cfg.shift_pad}"
     )
     print(
         f"[train_v3] throughput={res.throughput_fps:.0f} fr/s  "

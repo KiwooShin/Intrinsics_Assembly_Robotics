@@ -41,6 +41,11 @@ from aic_example_policies.ros.chunk_ensemble import (
     ChunkEnsemble,
     select_exec_twists,
 )
+from aic_example_policies.ros import state_assembly
+from aic_example_policies.ros.guarded_descent import (
+    GuardedDescentConfig,
+    GuardedDescentController,
+)
 
 IMG = 128
 
@@ -85,7 +90,12 @@ class DeployACT(Policy):
         ckpt_path = os.environ.get("AIC_CKPT", "/home/kiwoos/training/ckpt/v2_wide.pt")
         ck = torch.load(ckpt_path, map_location=self.device, weights_only=False)
         self.K = ck["K"]
-        self.model = _Policy(self.K).to(self.device)
+        # State dimensionality: 7-D (TCP pose) checkpoints predate the wrench
+        # upgrade and lack this key, so default to 7 for byte-identical behavior;
+        # 13-D checkpoints append the live wrist wrench to the state. Same
+        # opt-in pattern as AIC_ENSEMBLE: the checkpoint decides, no env needed.
+        self.state_dim = int(ck.get("state_dim", state_assembly.POSE_DIM))
+        self.model = _Policy(self.K, state_dim=self.state_dim).to(self.device)
         self.model.load_state_dict(ck["model"]); self.model.eval()
         self.amean = ck["amean"].to(self.device); self.astd = ck["astd"].to(self.device)
         self.smean = ck["smean"].to(self.device); self.sstd = ck["sstd"].to(self.device)
@@ -98,10 +108,35 @@ class DeployACT(Policy):
         if os.environ.get("AIC_ENSEMBLE", "0").strip() == "1":
             m = float(os.environ.get("AIC_ENSEMBLE_M", str(DEFAULT_DECAY)))
             self._ensemble = ChunkEnsemble(decay=m)
+        # Guarded-descent probe (SESSION_REPORT.md 2026-07-19 stall analysis),
+        # opt-in via AIC_GUARDED=1 (+ AIC_GUARDED_* overrides). Same lifecycle as
+        # AIC_ENSEMBLE: the config is parsed once here; when disabled it is None
+        # and the execution path below is byte-identical to the plain policy. A
+        # fresh GuardedDescentController is built per episode in insert_cable.
+        self._guarded_config: GuardedDescentConfig | None = None
+        _gcfg = GuardedDescentConfig.from_env(os.environ)
+        if _gcfg.enabled:
+            self._guarded_config = _gcfg
+        guarded_banner = "OFF"
+        if self._guarded_config is not None:
+            gc = self._guarded_config
+            guarded_banner = (
+                f"ON (speed<{gc.speed_threshold:g} m/s for {gc.stall_window_s:g}s after "
+                f"{gc.min_runtime_s:g}s, step={gc.step_size * 1e3:g}mm "
+                f"cap={gc.travel_cap * 1e3:g}mm force_thr={gc.contact_force_threshold:g}N, "
+                f"z_stiff={gc.z_stiffness})"
+            )
+        ensemble_banner = (
+            "ON (m=%g, w_i=exp(-m*i), i=0 oldest)" % self._ensemble.decay
+            if self._ensemble is not None
+            else "OFF"
+        )
         self.get_logger().info(
-            f"DeployACT loaded {ckpt_path} (K={self.K}) on {self.device}; "
+            f"DeployACT loaded {ckpt_path} (K={self.K}, state_dim={self.state_dim}"
+            f"{', +wrist_wrench' if self.state_dim == state_assembly.POSE_WRENCH_DIM else ''}) "
+            f"on {self.device}; "
             f"MODE_POSITION receding horizon exec_steps={self.exec_steps} substeps={SUBSTEPS}; "
-            f"temporal_ensembling={'ON (m=%g, w_i=exp(-m*i), i=0 oldest)' % self._ensemble.decay if self._ensemble is not None else 'OFF'}"
+            f"temporal_ensembling={ensemble_banner}; guarded_descent={guarded_banner}"
         )
 
     def _img(self, raw):
@@ -123,13 +158,55 @@ class DeployACT(Policy):
         imgs = torch.stack([self._img(obs.left_image), self._img(obs.center_image),
                             self._img(obs.right_image)], 1)      # (1,3,3,H,W)
         p = obs.controller_state.tcp_pose
-        state = torch.tensor([[p.position.x, p.position.y, p.position.z,
-                               p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w]],
-                             device=self.device, dtype=torch.float32)
+        pose = np.array([p.position.x, p.position.y, p.position.z,
+                         p.orientation.x, p.orientation.y, p.orientation.z,
+                         p.orientation.w], dtype=np.float32)
+        # For a 13-D (wrench-augmented) checkpoint, append the live wrist wrench in
+        # the training order [fx, fy, fz, tx, ty, tz]; a 7-D checkpoint ignores it.
+        wrench = None
+        if self.state_dim == state_assembly.POSE_WRENCH_DIM:
+            w = obs.wrist_wrench.wrench
+            wrench = np.array([w.force.x, w.force.y, w.force.z,
+                               w.torque.x, w.torque.y, w.torque.z], dtype=np.float32)
+        raw_state = state_assembly.assemble_state(pose, wrench, self.state_dim)
+        state = torch.from_numpy(raw_state).to(self.device).unsqueeze(0)
         state = (state - self.smean) / self.sstd
         with torch.inference_mode():
             pred = self.model(imgs, state)[0]                      # (K, 6) normalized
         return (pred * self.astd + self.amean).cpu().numpy()
+
+    @staticmethod
+    def _wrench_force(obs) -> np.ndarray:
+        """Return the wrist force ``[fx, fy, fz]`` (N) from an observation.
+
+        Args:
+            obs: The current ``Observation`` message.
+
+        Returns:
+            A ``(3,)`` numpy array of the wrist-wrench force components.
+        """
+        f = obs.wrist_wrench.wrench.force
+        return np.array([f.x, f.y, f.z], dtype=np.float64)
+
+    def _command_targets(self, move_robot: MoveRobotCallback, targets: np.ndarray,
+                         stiffness: list, dt_fine: float) -> None:
+        """Command a sequence of absolute pose targets via ``set_pose_target``.
+
+        Args:
+            move_robot: Callback that forwards a ``MotionUpdate`` to the controller.
+            targets: An ``(n, 7)`` array of ``[x, y, z, qx, qy, qz, qw]`` poses.
+            stiffness: The 6-D MODE_POSITION stiffness to command.
+            dt_fine: Sleep between consecutive sub-pose commands (s).
+        """
+        for tgt in targets:
+            pose = Pose(
+                position=Point(x=float(tgt[0]), y=float(tgt[1]), z=float(tgt[2])),
+                orientation=Quaternion(x=float(tgt[3]), y=float(tgt[4]),
+                                       z=float(tgt[5]), w=float(tgt[6])),
+            )
+            self.set_pose_target(move_robot=move_robot, pose=pose,
+                                 stiffness=stiffness, damping=POSE_DAMPING)
+            self.sleep_for(dt_fine)
 
     def insert_cable(self, task: Task, get_observation: GetObservationCallback,
                      move_robot: MoveRobotCallback, send_feedback: SendFeedbackCallback, **kwargs):
@@ -161,10 +238,46 @@ class DeployACT(Policy):
         abs_step = 0
         if self._ensemble is not None:
             self._ensemble.clear()
+        # Fresh guarded-descent controller per episode (None when AIC_GUARDED off,
+        # keeping the loop below byte-identical to the plain policy).
+        guarded = (
+            GuardedDescentController(self._guarded_config)
+            if self._guarded_config is not None
+            else None
+        )
         while (self.time_now() - start) < budget:
             obs = get_observation()
             if obs is None:
                 continue
+            # Guarded-descent probe (opt-in). While approaching this only observes
+            # and returns targets=None so the learned path below runs unchanged;
+            # once the stall fires it returns scripted descent targets to command
+            # in place of the learned chunk. The whole block is skipped when the
+            # probe is disabled, so DeployACT is byte-identical with AIC_GUARDED
+            # unset.
+            if guarded is not None:
+                p_g = obs.controller_state.tcp_pose
+                pos_g = np.array([p_g.position.x, p_g.position.y, p_g.position.z])
+                quat_g = np.array([p_g.orientation.x, p_g.orientation.y,
+                                   p_g.orientation.z, p_g.orientation.w])
+                elapsed_g = (self.time_now() - start).nanoseconds * 1e-9
+                gstep = guarded.cycle(elapsed_g, pos_g, quat_g,
+                                      self._wrench_force(obs), substeps=SUBSTEPS)
+                for line in gstep.log_lines:
+                    self.get_logger().info(line)
+                if gstep.targets is not None:
+                    stiffness = gstep.stiffness if gstep.stiffness is not None else POSE_STIFFNESS
+                    self._command_targets(move_robot, gstep.targets, stiffness, dt_fine)
+                    send_feedback("DeployACT guarded descent")
+                    if elapsed_g - last_log >= 2.0:
+                        last_log = elapsed_g
+                        self.get_logger().info(
+                            f"t={elapsed_g:4.1f}s GUARDED phase={gstep.phase} "
+                            f"steps={gstep.steps} travel={gstep.travel*1e3:.1f}mm "
+                            f"|F-base|={gstep.force_delta:.2f}N contacts={gstep.contacts} "
+                            f"tcp=({pos_g[0]:+.3f},{pos_g[1]:+.3f},{pos_g[2]:+.3f})"
+                        )
+                    continue
             chunk = self._predict_chunk(obs)                       # (K, 6)
             p = obs.controller_state.tcp_pose
             pos0 = np.array([p.position.x, p.position.y, p.position.z])

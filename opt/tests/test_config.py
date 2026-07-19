@@ -49,6 +49,42 @@ class TrainConfigTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             config.TrainConfig(ema_decay=-0.1)
 
+    def test_demo_fix_defaults_off(self) -> None:
+        # New demo-side fixes are all opt-in; defaults reproduce the legacy path.
+        c = config.TrainConfig()
+        self.assertFalse(c.tail_trim)
+        self.assertFalse(c.use_wrench)
+        self.assertEqual(c.state_dim, 7)
+        self.assertFalse(c.pushin_enabled)
+        self.assertEqual(c.pushin_weight, 1.0)
+        self.assertEqual(c.shift_pad, 0)
+
+    def test_state_dim_property(self) -> None:
+        self.assertEqual(config.TrainConfig(use_wrench=False).state_dim, 7)
+        self.assertEqual(config.TrainConfig(use_wrench=True).state_dim, 13)
+
+    def test_pushin_enabled_property(self) -> None:
+        self.assertTrue(config.TrainConfig(pushin_weight=4.0).pushin_enabled)
+        self.assertFalse(config.TrainConfig(pushin_weight=1.0).pushin_enabled)
+
+    def test_bad_pushin_weight(self) -> None:
+        with self.assertRaises(ValueError):
+            config.TrainConfig(pushin_weight=0.5)
+
+    def test_bad_tail_trim_threshold(self) -> None:
+        with self.assertRaises(ValueError):
+            config.TrainConfig(tail_trim_threshold=-0.001)
+
+    def test_bad_dt_frame(self) -> None:
+        with self.assertRaises(ValueError):
+            config.TrainConfig(dt_frame=0.0)
+
+    def test_bad_ramp_and_margin(self) -> None:
+        with self.assertRaises(ValueError):
+            config.TrainConfig(pushin_ramp_s=-1.0)
+        with self.assertRaises(ValueError):
+            config.TrainConfig(tail_trim_margin_s=-0.1)
+
 
 class ResultRecordsTest(unittest.TestCase):
     """Result dataclasses expose the expected derived fields."""

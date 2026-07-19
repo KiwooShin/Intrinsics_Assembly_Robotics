@@ -7,6 +7,21 @@ layout matching the oracle demo `~/demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`).
 
 ---
 
+## 2026-07-19 00:45 — 180-s head-to-head: p2_k8 run done (0/15 insert); control running
+
+The retrain finished in 17 min at 96% GPU (p2_k8 val L1 0.00129, p2_k16
+0.00130 — both ~40% better than p1) and the 180-s matched-seed head-to-head
+launched at 23:00; p2_k8's full run is in: **0/15 insertions** (mean 5.3,
+officials −1.8/37.0/29.7), with genuine approach gains on two previously-
+floored strata (41.5, 34.9 partial credit) but three −23 SC collisions —
+Phase-2 data improved SFP approaches while SC remains the weak point, and
+the last-inch stall persists even at full budget. v2_wide_180 (the 119.4/300
+reference) started 00:39; its officials decide whether the old checkpoint's
+insertion ability stands as the adoption choice.
+
+**Next 2 h:** v2_wide_180 completes (~02:20) → p1_k16_180 → EVALBATCHDONE
+~04:00 → full pairwise comparison + analysis + final 48-h report at dawn.
+
 ## 2026-07-18 22:30 — Phase-2 COMPLETE (33/40 KEEP); dataset at 77 episodes
 
 The failure-driven campaign finished cleanly at 22:28: **33 KEEPs** (30 SFP at

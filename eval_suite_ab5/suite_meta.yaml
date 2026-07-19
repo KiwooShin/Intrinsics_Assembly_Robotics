@@ -1,0 +1,20 @@
+seed: 20260712
+n_stratified: 12
+n_official: 3
+n_total: 15
+continuous_axes:
+  board_x:
+  - 0.15
+  - 0.2
+  board_y:
+  - -0.21
+  - 0.05
+  board_yaw:
+  - -3.141592653589793
+  - 3.141592653589793
+  grasp_z:
+  - 0.04
+  - 0.046
+template: /home/kiwoos/work/Intrinsics_Assembly_Robotics/aic_engine/config/eval_config.yaml
+ab5_subset: true
+ab5_note: 5-config A/B subset of eval_suite_smoke (officials + cfg_001 + cfg_005) for the temporal-ensembling test; matched seeds identical to parent suite

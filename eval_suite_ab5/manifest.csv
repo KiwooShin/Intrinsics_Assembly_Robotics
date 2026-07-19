@@ -1,0 +1,6 @@
+config_id,source,rail,plug,port,port_name,board_x,board_y,board_yaw,grasp_z,config_file
+cfg_001,stratified,0,SFP,1,sfp_port_1,0.164459,0.023119,0.836698,0.040403,configs/cfg_001.yaml
+cfg_005,stratified,1,SFP,1,sfp_port_1,0.167603,-0.162898,2.667286,0.041362,configs/cfg_005.yaml
+official_1,official,2,SFP,0,sfp_port_0,0.160000,-0.210000,3.100000,0.042450,configs/official_1.yaml
+official_2,official,4,SFP,1,sfp_port_1,0.160000,0.050000,-3.100000,0.045450,configs/official_2.yaml
+official_3,official,1,SC,0,sc_port_0,0.200000,-0.150000,-1.800000,0.040450,configs/official_3.yaml

@@ -365,3 +365,220 @@ floor with no insertion event (62.8/65.0) — micro-tune the floor deeper
 eval-band SC poses (28.1/42.9/58.6) — the entrance-frame retarget needs a
 pose-conditioned approach waypoint. Neither blocks tonight's retrain; SFP
 coverage of the floored strata (the eval batch's main gap) is complete.
+
+## 2026-07-19 FINAL — 180s head-to-head + 48h retrospective
+
+Final analysis sub-agent, on the run-closing full-budget comparison. Protocol
+pinned per CLAUDE.md §6: primary metric = matched-seed in-sim eval-suite score
+(rliable IQM + stratified-bootstrap 95% CI, Agarwal et al. arXiv:2108.13264);
+val first-action L1 is a secondary diagnostic only.
+
+**Pinned config (identical across all three rows):** suite `eval_suite_smoke`
+(15 configs = 12 stratified + 3 official), **time_limit = 180 sim-s** (confirmed
+in every `configs/*.yaml`), matched seeds, **n=1 seed/config**. Batch
+`results/eval_batch_180.log`, run order p2_k8 → v2_wide → p1_k16,
+EVALBATCHDONE 2026-07-19 03:49:46, ~6.5 min/trial, zero harness incidents.
+Checkpoints: `~/training/ckpt/{p2_k8,v2_wide,p1_k16}.pt`.
+
+### (a) Final 180s summary table (one row per checkpoint)
+
+| Checkpoint (topic) | Train eps / K | Verdict | Insertions | Mean [95% CI] | IQM [95% CI] | Outcomes (prox/miss/coll) | Off-limit −23 | Officials 1/2/3 (Σ/300) |
+|---|---|---|---|---|---|---|---|---|
+| **v2_wide** — prior best; proven 119.4/300 on the exact official eval config | 16 legacy / K16 (deploy h=4) | **ADOPT** (only demonstrated inserter; FAIL to insert on this harder suite) | 0/15 | **7.75** [4.00, 12.21] | 1.72 [1.00, 7.96] | 3 / 10 / 2 | 2 | **24.8 / 39.6 / 33.3 (Σ97.7)** |
+| **p2_k8** — new retrain incl Phase-2 failure-driven data; best val L1 (0.00129) | ~93 (P0 44 + P2 33 + 16 legacy) / K8 | FAIL (approach-only) | 0/15 | 5.29 [−1.40, 12.04] | **3.88** [−2.61, 11.73] | 4 / 7 / 4 | 4 (incl 3 SC) | −1.8 / 37.0 / 29.7 (Σ64.9) |
+| **p1_k16** — 60-ep retrain (incl 5 Phase-0 SC), K=16 | 60 (39 SFP + 5 SC + 16 legacy) / K16 | FAIL (approach-only) | 0/15 | 3.03 [−1.01, 7.08] | 1.00 [−1.67, 6.30] | 3 / 9 / 3 | 3 | 1.0 / **43.0** / 24.8 (Σ68.8) |
+
+**Zero insertions in 45/45 trials.** All three paired bootstraps **inconclusive**
+(every CI spans 0): p2_k8−v2_wide mean −2.46 [−10.98, 7.32] / IQM −3.60 [−13.33,
+5.77]; p2_k8−p1_k16 mean +2.25 [−5.65, 10.80] / IQM −0.08 [−6.00, 9.09];
+v2_wide−p1_k16 mean +4.72 [−2.87, 11.74] / IQM +3.84 [−0.38, 13.29]. Point
+estimates split the picture: **v2_wide best on officials + mean**, **p2_k8 best
+on IQM and the only checkpoint earning stratified partials** (cfg_001 41.5,
+cfg_005 34.9 — where all others floor at +1.0), **p1_k16 worst on mean/IQM** but
+holds the single best official cell (official_2 43.0). None is statistically
+separable from another; 8–9/15 configs floor at exactly +1.0 on all three.
+
+### (b) Adoption call — KEEP v2_wide.pt as the submission checkpoint
+
+**Decision: no change. v2_wide.pt remains the submission model.** Reasoning:
+
+1. **It is the only checkpoint with a demonstrated insertion result** — 119.4/300
+   with genuine insertions on the exact official eval config. No challenger
+   inserted *anywhere*, at either budget (0/45 @180s, 0/45 @60s), on any pose.
+2. **It leads the officials here** (Σ97.7 vs p2 64.9, p1 68.8). The 3 official
+   configs are the closest proxy to the real submission config; v2 wins that
+   subset outright and also leads the overall mean (7.75).
+3. **No statistical grounds to switch.** Every pairwise bootstrap is
+   inconclusive (all CIs include 0). p2_k8's IQM lead (3.88) and its unique
+   stratified partials rank *approach quality*, not task success — and come with
+   the worst officials and **3 SC −23 collisions** that a submission cannot
+   afford. p1_k16 is dominated on mean/IQM.
+4. **Better data did not convert to task success.** p2_k8 had the best val L1
+   (0.00129, ~40% better than p1) yet the worst officials and 0 insertions —
+   a textbook decoupling of the L1 proxy from the scored task, exactly the
+   canonical-metric warning in this report's 2026-07-12 analysis.
+
+**What evidence would overturn this (explicit):**
+- (a) A challenger records **≥1 genuine insertion** (tier-3 insertion event) on
+  the matched suite or the official poses — any nonzero insertion beats v2's 0
+  on this suite and forces a re-rank; **or**
+- (b) A challenger beats v2_wide on the **official-pose subset** by a
+  paired-bootstrap CI that **excludes 0**, with mean of **≥3 seeds** (§6); **or**
+- (c) A challenger **matches** v2's officials (Σ≈97) while strictly dominating on
+  approach **and** with **zero SC −23 regressions**.
+Absent any insertion anywhere, approach-only IQM/mean leads (p2's) are
+insufficient — they measure the wrong quantity.
+
+### (c) Root cause — the universal last-inch stall (mode-averaging to zero velocity)
+
+The run-log forensics are unambiguous and identical across every partial-credit
+trial. Representative scored trials:
+
+- **v2_wide / official_2 (39.57):** tier_1 = 1, tier_2 = 17.2, tier_3 = 21.4;
+  *"Total end-effector path length: 0.18 m, initial plug-port distance: 0.18 m"*;
+  tier-3 *"No insertion detected. Final plug port distance: 0.06m."*
+- **p2_k8 / cfg_001 (41.49):** tier_2 = 16.8, tier_3 = 23.7; EE path 0.22 m vs
+  initial 0.21 m; *"Final plug port distance: 0.05m."*
+- **p2_k8 / cfg_005 (34.92):** EE path 0.25 m vs initial 0.20 m; *"Final plug
+  port distance: 0.08m."*
+
+**Signature.** The EE path length ≈ the full initial plug-port distance, so the
+arm executes a *clean directed approach* (not a frozen arm — that failure mode
+was fixed 2026-07-12, 36→119). It then **stalls at 0.05–0.08 m from the port**
+and sits there for the remainder of the 180 s. Extra budget does not help:
+**this is a fixed-point attractor, not a time-out.** The 60→180 s change shuffled
+approach-efficiency bonuses but unlocked no insertions, precisely because the
+stall is positional, not temporal.
+
+**Mechanism (multimodality / mode-averaging).** Near the port, the observation
+resembles the seated/terminal frames of the CheatCode demonstrations, whose
+oracle decelerates to **zero velocity at seating** — so the demonstrated action
+distribution near the port is bimodal ("keep pushing in" vs "stopped, done") and
+collapses in mean toward zero. A deterministic L1/L2-regressed ACT head returns
+that mean → ~zero predicted twist → the receding-horizon integrator produces a
+target ≈ current TCP → no motion → stall. This is the classic action-chunking
+multimodality problem (ACT/ALOHA, Zhao et al. arXiv:2304.13705) and matches the
+prior in-repo note (2026-07-12: *"stalls 5–6 cm short: near-port view ≈ seated
+end-state → ~0 velocity pred"*). It is checkpoint-independent because all three
+share the same deterministic-head architecture and stationary-ended demos.
+
+**Why v2 scores 119.4 on the true official config but 97.7 (0 insert) here:**
+the suite's official-family poses are genuinely harder-aligned than the exact
+official eval poses; on the easy exact poses the identical stall still lands
+inside the insertion capture radius, so v2 seats; on this harder suite the same
+stall lands 5–6 cm out. Confirms the suite is a stricter test than the official
+config, not that v2 regressed.
+
+**SC −23 failures** are a distinct, orthogonal mode: p2_k8/cfg_006 logs
+*"Contacts detected between [ur5e wrist_3_link] and [nic_card_mount_2 …]. Penalty
+applied"* → tier_1 +1 − 24 = −23. The wrist strikes a **distractor NIC-card
+mount** during the SC approach (SC oracle fragility under eval-band yaw +
+distractors), not the target port. p2's 3 SC −23s are why its mean/officials
+trail despite the best approaches on SFP.
+
+**Ranked next levers for the last inch (with sources):**
+1. **Last-inch DAgger / HG-DAgger** — aggregate CheatCode corrective demos seeded
+   at the *observed stall states* (final plug-port 0.05–0.08 m, near-port views),
+   teaching non-zero closing velocity out of the zero-velocity attractor. Highest
+   value; directly attacks the fixed point. DAgger (Ross et al. arXiv:1011.0686),
+   HG-DAgger (Kelly et al. arXiv:1810.02890).
+2. **Represent the multimodality** — full ACT CVAE latent + temporal ensembling
+   (arXiv:2304.13705) in place of the deterministic-mean head, so "push-in" is a
+   selectable mode rather than averaged to zero. Pair with (1).
+3. **Residual RL for contact-rich seating** — ResiP / RLDG-style residual
+   correction on top of the BC approach, rewarded by the engine insertion event
+   (ResiP residual-RL arXiv:2407.16677; RLDG arXiv:2412.09858); evaluate LiPo
+   (arXiv:2506.05165) as a further contact-rich policy-composition lever. Learns
+   the last inch where BC saturates.
+4. **SC oracle robustness** — pose-conditioned approach waypoint + descent-floor
+   micro-tune (≈−0.007) + zero-contact re-validation under eval-band yaw +
+   distractors, to stop turning SC partials into −23 penalties.
+
+### (d) 48h-run retrospective (2026-07-17 17:15 → 2026-07-19 17:00)
+
+**Timeline (resumed run):**
+- **Jul 17 17:15** — ▶ RESUMED for the 48 h run. Env verified identical to the
+  Jul 12 pause (22 KEEP + 16 legacy eps, repo clean); Phase-0 campaign relaunched
+  (resumable, skipped the 22 converted eps).
+- **Jul 17 19:50** — Phase-0 collection **COMPLETE: 39/40 KEEP** (97.5%, oracle
+  92.6–94.0). Dataset → 55 eps (39 Phase-0 SFP + 16 legacy).
+- **Jul 17 ~20:30–21:45** — **SC oracle FIX (19.07 → ~94):** root cause = CheatCode
+  had no SC branch and rammed the rotated SC port frame; retarget to the
+  `_entrance` frame + descent-floor tune −0.005 → official trial_3 94.10 full,
+  0 contacts. SC collection kept 5/8. Dataset → 60 eps (39 SFP + 5 SC + 16
+  legacy). **RETRAIN-P1** launched (p1_k8 shift8, p1_k16 shift4).
+- **Jul 18 00:00–12:12** — **Harness fratricide saga (6 defects, ~12 h lost to
+  infra):** (1) agent-waiter stalls — self-armed monitors never fired (3rd
+  occurrence) → **banned; detached resumable scripts mandated (CLAUDE.md §6);**
+  (2) torch-less policy launcher zeroed every trial → venv pinned in runner +
+  batch; (3) two-batch collision — overly-broad cleanup pkill fratricided the
+  sibling → flock single-instance lock + narrowed pattern; (4) success-only
+  completion regex → non-inserting trials wrote no scoring.yaml → SCORE-FIX;
+  (5+6) shared global ROS graph + name-matched kills + orphaned bringup EXIT
+  traps detonating into peers, **321 leaked orphan nodes** burning ~3 cores and
+  corrupting /tf → **process-group-scoped teardown**, reap-on-timeout,
+  preflight orphan sweep, sequential-only invariant (**165 tests**). p1_k8
+  confirmed HEALTHY offline (its 0/100 was pure artifact).
+- **Jul 18 12:12–17:01** — First **fully valid batch: smoke60** (60 sim-s). Point
+  order p1_k16 6.4 > p1_k8 5.3 > v2_wide 2.8; **0/45 insertions**, all
+  inconclusive. Analysis verdict: 60 s is an **approach-only proxy** that
+  truncates v2's insertions (119.4→71.3 on officials); floored strata = a
+  **moderate-yaw + rail0 + SC coverage gap** (BC support failure).
+- **Jul 18 17:20–22:28** — **Phase-2 failure-driven collection:** 40 configs
+  targeting the floored strata → **33 KEEP** (82.5%). Dataset → 77 eps
+  (69 SFP + 8 SC). **SC keep-rate collapsed to 3/8** under eval-band yaw +
+  distractors (two failure modes logged).
+- **Jul 18 22:30–23:00** — **P2 RETRAIN** both K on ds_phase0+ds_phase2 (+legacy
+  ≈ 93 train eps): **val L1 p2_k8 0.00129, p2_k16 0.00130** (~40% better than p1),
+  17 min at 96% GPU.
+- **Jul 18 23:00 → Jul 19 03:49** — **180 s matched-seed head-to-head**
+  (p2_k8 → v2_wide → p1_k16, 15 cfgs each). **0/45 insertions;** v2_wide leads
+  officials, p2_k8 best IQM + only strata partials, all pairwise inconclusive.
+
+**What worked:**
+- **Detached resumable scripts** (`collect_campaign.sh`, `eval_batch.sh`, DONE
+  markers) after the waiter ban — zero waiter stalls thereafter; Phase-2 (5 h)
+  and the 180 s batch (4.8 h) both ran clean end-to-end.
+- **Hardened harness** — process-group teardown ended the fratricide; both prior
+  failure modes (startup GetState hang, p1 joint-bound spikes) verified **ABSENT**
+  in the final batch.
+- **SC oracle fix (19→94)** unblocked SC data + trial-3's scoring ceiling.
+- **Failure-driven targeting** produced measurable SFP approach gains (p2_k8's
+  41.5 / 34.9 strata partials where every other checkpoint floors at 1.0).
+- **Metric discipline (§6)** — matched-seed IQM+CI kept us from adopting on the
+  misleading 60 s point estimates or the val-L1 proxy.
+- **Storage-light collection** — 40-demo Phase-2 campaign, zero storage incidents.
+
+**What didn't work:**
+- **0 insertions everywhere** (0/45 @180s, 0/45 @60s). The last-inch stall — the
+  single most important problem — was never solved. This is the run's headline
+  failure.
+- **More/better data ≠ task success:** p2 had the best val L1 and best IQM yet
+  0 insertions and the *worst* officials (SC −23s). L1 improvement decoupled from
+  the scored task.
+- **SC got worse at eval:** Phase-2 SC data + eval-band yaw dropped the oracle
+  keep-rate to 3/8 and p2's 3 SC configs scored −23 (wrist into distractor mount).
+- **~12 h (a quarter of the run) lost to harness infrastructure** before the first
+  valid score.
+- **No challenger beat v2_wide's proven insertion** — better *approach* policies,
+  not a better *submission*.
+
+**Ranked recommendations for the next session:**
+1. **Last-inch DAgger (highest value):** collect CheatCode corrective demos at the
+   observed 0.05–0.08 m stall states; teach non-zero closing velocity out of the
+   zero-velocity attractor. Single change most likely to flip 0→nonzero
+   insertions. (arXiv:1011.0686, arXiv:1810.02890)
+2. **Kill the mode-averaging:** full ACT CVAE latent + temporal ensembling
+   (arXiv:2304.13705) so near-port multimodality is represented, not averaged to
+   zero. Pair with (1).
+3. **Residual RL for the last inch:** ResiP/RLDG-style residual on the BC policy,
+   rewarded by the engine insertion event (arXiv:2407.16677, arXiv:2412.09858);
+   evaluate LiPo (arXiv:2506.05165).
+4. **SC oracle robustness:** pose-conditioned approach waypoint + deeper descent
+   floor (≈−0.007) + zero-contact re-validation under eval-band yaw + distractors.
+5. **Official-pose eval set:** build a matched-seed suite from the EXACT official
+   poses (where v2 inserts) alongside the harder stratified suite, so insertion
+   signal is never truncated by pose difficulty and the metric registers the
+   capability we optimize. Keep 180 s; never gate adoption at 60 s.
+6. **Protect the infra:** the harness is now hardened (pgroup teardown, detached
+   resumable scripts) — do NOT reintroduce parallel batches or agent-waiters.

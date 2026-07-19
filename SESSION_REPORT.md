@@ -582,3 +582,52 @@ trail despite the best approaches on SFP.
    capability we optimize. Keep 180 s; never gate adoption at 60 s.
 6. **Protect the infra:** the harness is now hardened (pgroup teardown, detached
    resumable scripts) — do NOT reintroduce parallel batches or agent-waiters.
+
+## 2026-07-19 05:30 — ENSEMBLE-AB: temporal ensembling helps v2_wide (adopt for deploy), hurts p2_k8 (keep OFF)
+
+**Question.** Does ACT temporal ensembling (arXiv:2304.13705; exp-decay chunk
+blending, `AIC_ENSEMBLE=1`, m=0.01, implemented 04:05 in
+`chunk_ensemble.py`/`DeployACT.py`) improve 180-s scores against the last-inch
+attractor? A/B on the pinned 5-config `eval_suite_ab5` (matched seeds vs the
+existing 180-s OFF rows; ~68 min, EVALBATCHDONE 05:18; validated mid-run that
+the live policy process had `AIC_ENSEMBLE=1` and the deployed source was
+byte-identical to the committed repo code).
+
+**Results (total score; per-config, OFF → ON):**
+
+| Config | v2_wide OFF | v2_wide ON | Δ | p2_k8 OFF | p2_k8 ON | Δ |
+|---|---|---|---|---|---|---|
+| cfg_001 | 1.0 (miss) | 1.0 (miss) | 0 | **41.5** (prox) | **−23.0 (COLLISION)** | −64.5 |
+| cfg_005 | 5.3 (coll†) | 13.5 (coll†) | **+8.3** | 34.9 (prox) | 36.5 (prox) | +1.6 |
+| official_1 | 24.8 (prox) | 30.5 (prox) | **+5.7** | −1.8 (coll) | **18.3 (prox)** | +20.1 |
+| official_2 | 39.6 (prox) | 39.7 (prox) | +0.1 | 37.0 (prox) | **12.6 (COLLISION)** | −24.4 |
+| official_3 | 33.3 (prox) | 38.7 (prox) | **+5.4** | 29.7 (prox) | 19.6 (prox) | −10.1 |
+| **Mean** | 20.8 | **24.7** | **+3.9** | 28.3 | 12.8 | **−15.5** |
+
+† cfg_005 collides under v2_wide in BOTH arms (contacts −24 in each) — the
+collision predates ensembling; ON still recovered +8.5 more tier_3.
+
+**Mechanism (tier decomposition).** Every v2_wide gain is pure tier_3
+(final-approach proximity): official_1 6.9→12.6, official_3 15.1→20.5, cfg_005
+11.0→19.4, while tier_2 force/contact sub-scores are unchanged (16.9–17.3
+everywhere, no new contact events). This is exactly the predicted closing-
+velocity injection: with K=16/exec 4, up to 4 buffered chunks cover each step,
+and older chunks — predicted from farther poses — still command approach
+velocity where the newest chunk has collapsed to the zero-velocity attractor.
+The feared force-penalty regression did NOT materialize for v2_wide. For p2_k8
+(K=8 → only 2-chunk blend, trained shift8 so off-phase chunk overlap is
+out-of-distribution) ensembling raised variance instead: two NEW collisions
+(cfg_001, official_2), one baseline collision FIXED (official_1) — a coin-flip
+on contact events, net −15.5.
+
+**Still 0/10 insertions** — ensembling nudges the attractor (~5–8 pts of
+tier_3 per config) but does not break it, consistent with the a-priori
+estimate of a transient ~0.06–0.1 m nudge. The structural fixes (last-inch
+DAgger, CVAE, residual RL) remain recommendations #1–3 unchanged.
+
+**Verdict: ADOPT `AIC_ENSEMBLE=1 AIC_ENSEMBLE_M=0.01` as the default deploy
+configuration for the adopted v2_wide checkpoint; keep OFF for p2_k8.**
+Caveat: n=1 per config (matched seeds); v2 pattern is 4 wins/1 tie with a
+mechanism-consistent tier_3 signature, but a full-suite confirmation with
+paired-bootstrap CIs is launching now (v2_ens on all 15 `eval_suite_smoke`
+configs @180 s, ~100 min) to make the call CI-backed before the run wraps.

@@ -7,6 +7,17 @@ layout matching the oracle demo `~/demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`).
 
 ---
 
+## 2026-07-19 05:35 — ENSEMBLE A/B: v2_wide +3.9 mean (wins/ties 5/5), p2_k8 −15.5 → adopt ON for v2 only
+
+The temporal-ensembling A/B finished 05:18: with AIC_ENSEMBLE=1 the adopted
+v2_wide improves or ties all 5 configs (mean 20.8→24.7, all gains pure tier_3
+final-approach, zero new contact events), while p2_k8 regresses −15.5 with two
+new collisions — verdict: default deploy = v2_wide + ensembling m=0.01, OFF for
+p2_k8; still 0/10 insertions, attractor nudged not broken. Next 2 h: 15-config
+full-suite confirmation of v2_ens @180 s (launched ~05:40, done ~07:20) for a
+paired-bootstrap CI against v2_wide_180, then final analysis + dashboard +
+wrap.
+
 ## 2026-07-19 03:55 — 180-s head-to-head COMPLETE: 0/45 insertions, v2_wide leads
 
 The full-budget matched-seed comparison finished at 03:49 with **zero

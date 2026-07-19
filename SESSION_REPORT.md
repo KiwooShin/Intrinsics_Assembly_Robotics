@@ -343,3 +343,25 @@ Note: 0/45 insertions means neither p1 retrain has yet matched v2's known
 insertion capability; the SC branch and the moderate-yaw coverage hole remain
 the two highest-value fixes (consistent with the prior SC-oracle and yaw-bug
 findings in this report).
+
+## 2026-07-18 Phase-2 collection — final tally + SC oracle follow-up
+
+**Campaign:** 40 failure-driven configs (seed 20260718, all distractor + eval-band
+yaw) → **33 KEEP / 7 DROP** (82.5%), 17:20–22:28, zero harness incidents,
+resumable driver, bags deleted per storage rule. Dataset now **77 episodes**
+(ds_phase0 44 + ds_phase2 33; 69 SFP + 8 SC), all with wrench/joints.
+
+| Cell group | Attempted | KEEP | Drops (score, cause) |
+|---|---|---|---|
+| SFP (port_0 boost + port_1) | 32 | 30 | 56.2, 57.7 (near-threshold oracle misses) |
+| SC rail0 | 4 | 1 (93.8) | 65.0 ins=0 (floor partial), 28.1, 42.9 (poor runs) |
+| SC rail1 | 4 | 2 (94.1, 94.0) | 62.8 ins=0 (floor partial), 58.6 (near-threshold) |
+
+**SC oracle follow-up (TOP priority for any future session):** under eval-band
+yaw + distractors the SC CheatCode keep-rate fell to 3/8 (vs 5/8 in Phase-0
+band). Two distinct failure modes: (a) partial-insert at the −0.005 descent
+floor with no insertion event (62.8/65.0) — micro-tune the floor deeper
+(≈−0.007) and re-validate zero-contact; (b) outright poor approaches on some
+eval-band SC poses (28.1/42.9/58.6) — the entrance-frame retarget needs a
+pose-conditioned approach waypoint. Neither blocks tonight's retrain; SFP
+coverage of the floored strata (the eval batch's main gap) is complete.

@@ -236,9 +236,9 @@
         experiment verdicts, and the Phase-0 data campaign.</div>
     </div>
     <div class="meta">
-      <div><span class="dot"></span><span class="live">campaign running</span> · demo 9 / 40</div>
-      <div>run started <b>2026-07-12 13:00</b></div>
-      <div>generated <b>2026-07-12 18:34 PDT</b></div>
+      <div><span class="dot"></span><span class="live">batch valid</span> · Phase-2 staged</div>
+      <div>resumed <b>2026-07-17 17:15</b> · ends <b>2026-07-19 17:00</b></div>
+      <div>generated <b>2026-07-18 17:20 PDT</b></div>
     </div>
   </header>
 
@@ -257,13 +257,13 @@
       </div>
       <div class="tile">
         <div class="lab">Demos available</div>
-        <div class="val">24</div>
-        <div class="foot">16 legacy + 8 new KEEP</div>
+        <div class="val">60</div>
+        <div class="foot">39 SFP + 5 SC Phase-0 (wrench) + 16 legacy</div>
       </div>
       <div class="tile">
-        <div class="lab">Phase-0 campaign</div>
-        <div class="val">8 <small>/ 40</small></div>
-        <div class="foot">KEEP · oracle ~93 / 100 each</div>
+        <div class="lab">smoke60 batch · best</div>
+        <div class="val">6.4 <small>mean</small></div>
+        <div class="foot">p1_k16 &gt; p1_k8 5.3 &gt; v2_wide 2.8 · 0/45 insert</div>
       </div>
       <div class="tile">
         <div class="lab">Inference latency</div>
@@ -308,24 +308,58 @@
     </div>
   </section>
 
+  <!-- ===== SMOKE60 BATCH ===== -->
+  <section>
+    <div class="sec-head">
+      <h2>Validated eval batch — smoke60 · 2026-07-18</h2>
+      <span class="note">First fully-valid suite run through the hardened harness (6 defects fixed). 15 matched-seed configs × 3 checkpoints, 60 sim-s fast protocol.</span>
+    </div>
+    <div class="card">
+      <div class="scroll-x"><table>
+        <thead><tr>
+          <th>Checkpoint</th><th>Verdict</th><th class="num">Mean [95% CI]</th><th class="num">IQM</th>
+          <th class="num">Insert</th><th>miss / coll / prox</th><th class="num">Officials Σ/300</th>
+        </tr></thead>
+        <tbody>
+          <tr><td><b>p1_k16</b> · K=16 retrain, 60 eps</td><td><span class="pill warn">Best · approach-only</span></td>
+              <td class="num">6.39 [−0.22, 13.27]</td><td class="num">3.76</td><td class="num">0/15</td><td>8 / 4 / 3</td><td class="num">78.6</td></tr>
+          <tr><td><b>p1_k8</b> · K=8 retrain</td><td><span class="pill warn">Approach-only</span></td>
+              <td class="num">5.35 [0.05, 11.41]</td><td class="num">2.85</td><td class="num">0/15</td><td>10 / 2 / 3</td><td class="num">75.1</td></tr>
+          <tr><td><b>v2_wide</b> · prior best (119.4 @ 180 s)</td><td><span class="pill mute">Control</span></td>
+              <td class="num">2.78 [−2.01, 7.58]</td><td class="num">1.00</td><td class="num">0/15</td><td>10 / 3 / 2</td><td class="num">71.3</td></tr>
+        </tbody>
+      </table></div>
+      <div class="banner">
+        <span style="font-size:15px;line-height:1">▲</span>
+        <div><b>Two findings.</b> (1) <b>P1 did not regress</b> — all paired bootstraps are inconclusive
+          (CIs include 0) with point order k16 &gt; k8 &gt; v2, and the earlier "p1_k8 0/100 collapse" is
+          confirmed artifact. (2) <b>The 60-s protocol is an approach-quality proxy, not an insertion
+          metric</b>: 0/45 insertions, 8–10 configs floor at +1.0 for every checkpoint, and v2_wide's
+          known insertion phase is truncated (119.4 → 71.3 on the same officials). Floored strata are a
+          <b>moderate-yaw + rail0 + SC coverage gap</b>, not distractors. Adoption gates on the 180-s
+          matched-seed head-to-head (overnight) per the canonical metric protocol.</div>
+      </div>
+    </div>
+  </section>
+
   <!-- ===== CAMPAIGN + STRATA ===== -->
   <section>
     <div class="sec-head">
-      <h2>Phase-0 stratified collection</h2>
-      <span class="note">CheatCode oracle demos, storage-light, one per rail × port stratum. Keep threshold: score ≥ 60.</span>
+      <h2>Data campaigns — Phase-0 complete, Phase-2 staged</h2>
+      <span class="note">CheatCode oracle demos, storage-light. Keep threshold: score ≥ 60. Phase-2: 40 failure-driven configs (32 SFP · 8 SC, all distractor + eval-band yaw) targeting the 10 floored cells — collection tonight.</span>
     </div>
     <div class="grid-2">
       <div class="card">
-        <div class="lab" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)">Campaign progress · 8 / 40 kept</div>
+        <div class="lab" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)">Phase-0 final · 39 / 40 kept (97.5%)</div>
         <div id="meter" class="meter"></div>
         <div class="legend">
-          <span><i class="sw" style="background:var(--good-mark)"></i> KEEP (8)</span>
-          <span><i class="sw" style="background:var(--crit-mark)"></i> DROP — SC unsolved (1)</span>
-          <span><i class="sw" style="background:var(--track)"></i> pending (31)</span>
+          <span><i class="sw" style="background:var(--good-mark)"></i> KEEP (39)</span>
+          <span><i class="sw" style="background:var(--crit-mark)"></i> DROP (1, config-specific)</span>
         </div>
-        <div class="cap">Demo 9 / 40 (<code style="font-family:var(--font-mono);font-size:11.5px">rail4 · port0</code>)
-          in progress. Every KEEP episode is 530 trimmed frames ending at the seated plug.
-          The lone DROP (SC, score 19.07) exposed a real bug, not a fluke — see the log below.</div>
+        <div class="cap">Phase-0 complete: 39 KEEPs at oracle 92.6–94.0, plus 5 SC episodes after the
+          CheatCode SC-entrance-frame fix validated at <b>94.1–94.3</b> (was 19.07 — trial 3's ~100 pts
+          unlocked). Dataset now <b>60 episodes</b> with wrench/joints. Phase-2 (failure-driven, seed
+          20260718) launches tonight into <code style="font-family:var(--font-mono);font-size:11.5px">ds_phase2</code>.</div>
       </div>
       <div class="card">
         <div class="lab" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Oracle score per stratum</div>
@@ -337,14 +371,35 @@
   <!-- ===== EXPERIMENT LOG ===== -->
   <section>
     <div class="sec-head">
-      <h2>Experiment log — 2026-07-12</h2>
-      <span class="note">Verdict + key metric per experiment. Detail on hover / in source reports.</span>
+      <h2>Experiment log — newest first</h2>
+      <span class="note">Verdict + key metric per experiment. Detail in SESSION_REPORT.md.</span>
     </div>
     <div class="scroll-x"><table>
       <thead><tr>
         <th>Lane</th><th>Experiment</th><th>Verdict</th><th>Key metric / evidence</th>
       </tr></thead>
       <tbody>
+        <tr>
+          <td class="lane">Eval</td>
+          <td><div class="xp-name">smoke60 batch · 3 checkpoints (07-18)</div>
+              <div class="xp-sub">first valid suite run; P1-regression question settled</div></td>
+          <td><span class="pill ok">Valid</span></td>
+          <td class="num">k16 6.39 &gt; k8 5.35 &gt; v2 2.78 mean · 0/45 insert (floor) · CIs incl. 0</td>
+        </tr>
+        <tr>
+          <td class="lane">Harness</td>
+          <td><div class="xp-name">Eval-harness hardening (07-18)</div>
+              <div class="xp-sub">fratricide: global name-matched kills + orphaned bringups</div></td>
+          <td><span class="pill ok">Fixed</span></td>
+          <td>6 defects; pgroup-scoped teardown + preflight sweep + flock; 165 tests</td>
+        </tr>
+        <tr>
+          <td class="lane">SC oracle</td>
+          <td><div class="xp-name">SC entrance-frame retarget (07-17)</div>
+              <div class="xp-sub">descent floor −0.005; SFP byte-identical</div></td>
+          <td><span class="pill ok">Success</span></td>
+          <td class="num">19.07 → 94.1–94.3 / 100 · zero contacts incl. official trial_3</td>
+        </tr>
         <tr>
           <td class="lane">Arm</td>
           <td><div class="xp-name">MODE_VELOCITY deadband hypothesis</div>
@@ -479,7 +534,7 @@
       <code>opt/results/leaderboard.md</code><code>opt/results/bench_infer.json</code>
       <code>~/training/ds_phase0/campaign_log.csv</code>
     </div>
-    <div>Static snapshot generated <b style="color:var(--ink-2)">2026-07-12 18:34 PDT</b>.
+    <div>Static snapshot generated <b style="color:var(--ink-2)">2026-07-18 17:20 PDT</b>.
       All figures transcribed from the repo — no fabricated values, no invented precision.
       The 73.4 score is retained only to document the discredited frozen-arm artifact.
       Governed by <code>CLAUDE.md</code> · primary metric = matched-seed in-sim suite score (IQM + CI).</div>
@@ -518,9 +573,11 @@
     { name: "rail2 · port1", plug: "SFP", score: 93.72, status: "keep" },
     { name: "rail3 · port0", plug: "SFP", score: 93.64, status: "keep" },
     { name: "rail3 · port1", plug: "SFP", score: 93.93, status: "keep" },
-    { name: "rail0 (SC)",   plug: "SC",  score: 19.07, status: "drop" }
+    { name: "rail4 · port0", plug: "SFP", score: 93.88, status: "keep" },
+    { name: "rail4 · port1", plug: "SFP", score: 93.79, status: "keep" },
+    { name: "SC (post-fix)", plug: "SC",  score: 94.06, status: "keep" }
   ];
-  var CAMPAIGN = { kept: 8, dropped: 1, planned: 40 };
+  var CAMPAIGN = { kept: 39, dropped: 1, planned: 40 };
 
   var SVGNS = "http://www.w3.org/2000/svg";
   function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }

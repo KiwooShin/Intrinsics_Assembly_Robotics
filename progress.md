@@ -7,6 +7,22 @@ layout matching the oracle demo `~/demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`).
 
 ---
 
+## 2026-07-18 18:25 — Post-batch sequence complete; Phase-2 failure-driven collection running
+
+Everything queued on the batch landed in one push: the analysis agent's verdict
+(60-s protocol is an approach-only proxy that truncates v2's insertions
+119.4→71.3; floored strata are a moderate-yaw + rail0 + SC coverage gap),
+the first-ever POLICY demo video (`~/demo/policy_p1_k16_official_1.mp4`,
+p1_k16 approaching to 0.06 m on official_1), the dashboard republished with
+the smoke60 leaderboard, and a 40-config failure-driven Phase-2 manifest
+(32 SFP with port_0 boost + 8 SC, all distractor + eval-band yaw, tested
+183/183). Collection is grinding cleanly (9/40 started, 7 KEEP at oracle
+92.6–94.0 / 1 near-threshold DROP, ~7 min/demo, CAMPAIGNDONE ~22:00).
+
+**Next 2 h:** collection continues into the SC cells; at CAMPAIGNDONE →
+retrain both K on ds_phase0+ds_phase2 → overnight 180-s matched-seed
+head-to-head (p2 winner + p1_k16 + v2_wide) that decides the real best model.
+
 ## 2026-07-18 16:40 — Control verdict: P1 NOT regressed; 60-s suite hits an insertion floor
 
 The v2_wide control finished and settled the question: the formal paired

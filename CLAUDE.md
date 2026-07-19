@@ -63,9 +63,19 @@ you touch it substantially.
 
 ## 4. Progress reporting (main agent duty)
 
-- The orchestrator writes to `progress.md` **every 2 hours** during autonomous
-  operation: a timestamped entry of **max 3 sentences** on what happened, plus
-  a 1-2 line plan for the next 2 hours. Newest entry on top.
+- The orchestrator writes to `progress.md` **every 4 hours** during autonomous
+  operation (user directive 2026-07-19; supersedes the earlier 2-hour cadence).
+  Each entry MUST contain three labelled parts, newest entry on top:
+  1. **Avg score** — the average engine score of the runs in this window (state
+     n and the suite/configs; n≥3 reps per claim per §6 noise-floor rule).
+  2. **What's missing** — gap analysis: which failure buckets/score tiers block
+     the target and why, grounded in the window's results.
+  3. **Next 4 h** — the concrete action plan for the next window (experiments,
+     gates, expected score movement).
+- At every 4-hour cycle the orchestrator spawns **multiple analysis sub-agents**
+  (not one) to review the experiments done so far — e.g. results-forensics,
+  literature-comparison, plan-critique — and synthesizes their outputs into the
+  progress entry's gap analysis and next-4h plan.
 - Research/experiment reports (progress.md entries at milestones, SESSION_REPORT.md,
   plan documents) must state **which SOTA models were considered** (with checkpoint
   ids where applicable) and **which research papers were referenced** (title +

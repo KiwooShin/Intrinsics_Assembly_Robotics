@@ -1,6 +1,11 @@
 # Progress Log — autonomous research run (started 2026-07-12)
 
-Rule: one entry per 2 hours, max 3 sentences + next-2h plan. Newest on top.
+Rule (updated 2026-07-19, user directive): one entry per **4 hours**, newest on
+top, each with three labelled parts — **Avg score** (mean engine score of the
+window's runs, with n; n≥3 reps per claim), **What's missing** (gap analysis
+vs the >90/100 target), **Next 4 h** (action plan). Every cycle is preceded by
+a multi-sub-agent analysis of the experiments so far (CLAUDE.md §4).
+Entries above this line's date follow the old 2-hour/3-sentence format.
 Latest demo video: `demo/policy_p1_k16_official_1.mp4` in this repo (gitignored;
 original copy in `~/demo/`; 2026-07-18 — first POLICY rollout video: p1_k16 on
 official_1, approach to 0.06 m, engine 14.0; three-camera layout matching the

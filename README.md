@@ -10,6 +10,11 @@ Built on the [Intrinsic AI for Industry Challenge](https://www.intrinsic.ai/even
 | ![Oracle demo: complete SFP insertion](docs/media/oracle_demo_sfp_rail0_sfp_port_0.gif) | ![Learned policy rollout on official_1](docs/media/policy_p1_k16_official_1.gif) |
 | `CheatCode` oracle (reads ground-truth port poses) seats the plug — engine score ≈93/100. This is the teacher and the per-trial upper bound. | ACT policy (3 RGB cams + TCP state, ~0.75 M params) drives a clean approach on an official evaluation config. 2.5× speed, three-camera view. |
 
+| Adopted checkpoint `v2_wide` on official_2 — engine 41.6 |
+|:---:|
+| ![Adopted checkpoint v2_wide on official_2](docs/media/policy_v2_wide_official_2.gif) |
+| The adopted checkpoint's characteristic behavior on a harder pose: a clean camera-only approach that stalls ~5–8 cm from the port — the **last-inch attractor** analyzed below. Shown deliberately: this is the current frontier the research plan attacks. |
+
 *GIFs are 2.5× timelapses of the full episodes.*
 
 ## Results

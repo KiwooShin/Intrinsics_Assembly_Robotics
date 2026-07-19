@@ -9,7 +9,7 @@ Entries above this line's date follow the old 2-hour/3-sentence format.
 Latest demo video: `demo/policy_p1_k16_official_1.mp4` in this repo (gitignored;
 original copy in `~/demo/`; 2026-07-18 — first POLICY rollout video: p1_k16 on
 official_1, approach to 0.06 m, engine 14.0; three-camera layout matching the
-oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`).
+oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v2_wide_official_2.mp4` (2026-07-19, adopted ckpt on official_2, engine 41.6).
 
 ---
 

@@ -7,6 +7,20 @@ layout matching the oracle demo `~/demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`).
 
 ---
 
+## 2026-07-19 09:10 — RUN COMPLETE: n=3 reps close the ensembling question (keep OFF); wrapping the 48 h session
+
+The 3-rep experiment finished 09:01: no config separates ensembling ON from
+OFF beyond sim noise (arm means OFF 23.1±2.1 vs ON 20.1±4.2; ON even missed
+official_1 once outright), so plain v2_wide.pt stays the deploy default and
+same-seed noise is now quantified at sd ≈3–18 pts — n≥3 reps required for any
+future per-config claim. All 48 h deliverables are complete and pushed:
+adopted checkpoint v2_wide (proven 119.4 insertion result), last-inch
+attractor root-cause + ranked fixes (DAgger/CVAE/residual RL), 93-episode
+Phase-0+2 dataset, hardened eval harness + 295 tests, temporal-ensembling
+implementation with a CI-backed negative result, demo video, dashboard, and
+full retrospective in SESSION_REPORT.md. Autonomous loop stops here — sim
+processes cleaned up; resume anytime from the repo runbooks.
+
 ## 2026-07-19 07:10 — Full suite OVERTURNS ensembling adoption; sim run-variance ±5–13 pts discovered
 
 The 15-config confirmation came back inconclusive-with-negative-point (mean

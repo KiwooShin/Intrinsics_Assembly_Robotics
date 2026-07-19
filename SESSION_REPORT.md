@@ -668,3 +668,42 @@ then one more ON rep (v2_ens_r3, ~28 min) → n=3 per config per arm (combining
 existing v2_wide_180 / v2_ens / v2_ens_full rows). Questions: (1) per-config
 run-variance σ; (2) does the officials' ON gain (official_1 replicated +5.5)
 survive n=3 mean±sd? Analysis + wrap on completion (~08:45).
+
+## 2026-07-19 09:10 — REPS-FINAL: n=3 closes the ensembling question — keep OFF, definitively
+
+**Design.** 3 repetitions per arm on the pinned 5-config `eval_suite_ab5`
+(OFF = v2_wide plain: v2_wide_180 / v2_off_r2 / v2_off_r3; ON = AIC_ENSEMBLE=1
+m=0.01: v2_ens / v2_ens_full / v2_ens_r3). Identical configs, seeds,
+checkpoint; the only variation within an arm is sim nondeterminism.
+
+| Config | OFF reps | ON reps | OFF mean±sd | ON mean±sd | diff |
+|---|---|---|---|---|---|
+| cfg_001 | 1.0/1.0/0.0 | 1.0/1.0/1.0 | 0.67±0.6 | 1.00±0.0 | +0.3 (all miss) |
+| cfg_005 | 5.3/7.0/9.8 | 13.5/2.8/14.8 | 7.34±2.3 | 10.37±6.6 | +3.0 (< ON sd; all collide) |
+| official_1 | 24.8/33.8/31.3 | 30.5/30.3/**0.0** | 29.97±4.6 | 20.27±17.6 | −9.7 (**ON r3 MISSED**) |
+| official_2 | 39.6/42.6/42.2 | 39.7/26.7/32.7 | 41.47±1.7 | 33.01±6.5 | −8.5 |
+| official_3 | 33.3/40.1/34.4 | 38.7/35.4/33.5 | 35.97±3.6 | 35.86±2.6 | −0.1 |
+| **Arm mean** | 20.8/24.9/23.5 | 24.7/19.2/16.4 | **23.08±2.09** | **20.10±4.21** | −3.0 |
+
+**Findings.**
+1. **No config separates ON from OFF beyond run noise.** The single-run
+   "gains" of the 04:45 ab5 preview (incl. official_1 "+5.5 replicated") were
+   sampling luck: OFF's own reps span 24.8–33.8 on that config.
+2. **Ensembling adds variance and a new failure mode.** ON's official_1 rep 3
+   scored 0.0 — an outright MISS on a config OFF reaches 3/3 — and ON arm sd
+   (4.21) is double OFF's (2.09). Blending stale chunks occasionally corrupts
+   the *approach*, not just the last inch (mirrors p2_k8's collision flips).
+3. **Sim noise quantified:** per-config same-seed run-to-run sd median ≈3.1,
+   max 17.6 (with outcome flips prox↔miss). 0/30 insertions.
+
+**FINAL verdict on ACT temporal ensembling (m=0.01) for this stack: no
+benefit, added risk — default deploy stays plain `v2_wide.pt`, AIC_ENSEMBLE
+stays opt-in-off.** The code + 295 tests remain committed for future use
+(e.g. after a CVAE head, where blending is the intended inference mode,
+arXiv:2304.13705).
+
+**Methodological deliverable for all future sessions:** any per-config claim
+from a single 180-s trial carries ±3–18 pt noise with possible outcome flips;
+adoption decisions need n≥3 reps (arm-level differences below ~4–5 pts are
+unresolvable even at n=3). This retroactively explains several of this run's
+"inconclusive" bootstraps and empirically grounds the canonical-metric rule.

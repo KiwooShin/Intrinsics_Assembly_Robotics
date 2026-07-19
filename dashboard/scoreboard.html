@@ -373,13 +373,14 @@
       </table></div>
       <div class="banner">
         <span style="font-size:15px;line-height:1">▲</span>
-        <div><b>Headline discovery: same-seed 180-s trials vary by ±5–13 pts run-to-run</b> (Gazebo/ROS
-          timing nondeterminism) — at or above the ensembling effect size, so the ab5 preview's "5/5
-          wins" was substantially sampling luck; only official_1's +5.5 replicated. Default deploy
-          stays <b>plain v2_wide</b>; AIC_ENSEMBLE=1 remains an opt-in research flag. Mechanism is
-          still real (tier_3 gains on port-reaching configs, arXiv:2304.13705) but needs n≥3 repeats
-          to resolve — a 3-rep-per-arm experiment on the 5 ab5 configs is running for final error bars.
-          Still 0 insertions anywhere; last-inch DAgger / CVAE / residual RL remain the structural fixes.</div>
+        <div><b>CLOSED at n=3/arm (30 trials): ensembling gives no benefit and adds risk — keep OFF.</b>
+          Arm means OFF 23.1±2.1 vs ON 20.1±4.2; no config separates beyond noise (official_3
+          36.0 vs 35.9); ON even produced an outright MISS (0.0) on official_1, a config OFF reaches
+          3/3, and doubles arm variance. The ab5 preview's "5/5 wins" — and its "replicated +5.5" —
+          were sampling luck: OFF's own reps span 24.8–33.8 there. <b>Sim noise quantified: same-seed
+          per-config sd median ≈3.1, max 17.6, with prox↔miss outcome flips — adoption decisions need
+          n≥3 reps; sub-5-pt arm differences are unresolvable.</b> 0/30 insertions. Default deploy:
+          plain v2_wide. Code + 295 tests stay committed for a future CVAE head (arXiv:2304.13705).</div>
       </div>
     </div>
   </section>

@@ -7,6 +7,20 @@ layout matching the oracle demo `~/demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`).
 
 ---
 
+## 2026-07-19 03:55 — 180-s head-to-head COMPLETE: 0/45 insertions, v2_wide leads
+
+The full-budget matched-seed comparison finished at 03:49 with **zero
+insertions in 45/45 trials**: v2_wide mean 7.7 (officials Σ97.7) > p2_k8 5.3
+(best IQM 3.9 and the only strata partials, 41.5/34.9) > p1_k16 3.0; all
+pairwise bootstraps inconclusive. The suite cannot separate checkpoints below
+the insertion threshold, and v2_wide's proven 119.4-with-insertions on the
+exact official poses stands as the only demonstrated insertion result — the
+final analysis agent is writing the adoption call + full 48-h retrospective
+into SESSION_REPORT now.
+
+**Next 2 h:** analysis lands → dashboard republish with the 180-s table →
+closing progress entry → run wrap-up (well before the 17:00 end).
+
 ## 2026-07-19 02:45 — 180-s verdict forming: nobody inserts on the matched suite
 
 v2_wide's full-budget run is in: **0/15 insertions** (mean 7.7, officials

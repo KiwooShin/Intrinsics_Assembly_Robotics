@@ -369,6 +369,86 @@ def build_strata_config(
     return c, row
 
 
+def parse_reps_spec(spec: str) -> dict[str, int]:
+    """Parse a ``stratum=reps`` comma-separated plan string into a mapping.
+
+    Enables non-uniform (failure-driven) collection: the caller can request more
+    demos for floored cells and fewer for cells that already earn partial credit.
+
+    Args:
+        spec: Comma-separated ``name=reps`` items (e.g.
+            ``'sc_rail0=4,sfp_rail0_sfp_port_0=4'``). Whitespace around items is
+            ignored; an empty/blank string yields an empty mapping.
+
+    Returns:
+        A ``{stratum_name: reps}`` mapping. Keys are not validated against the
+        known strata here (see :func:`build_strata_plan`).
+
+    Raises:
+        ValueError: If an item lacks ``=``, has a non-integer or negative reps
+            value, or repeats a stratum name.
+    """
+    plan: dict[str, int] = {}
+    if not spec or not spec.strip():
+        return plan
+    for raw_item in spec.split(','):
+        item = raw_item.strip()
+        if not item:
+            continue
+        if '=' not in item:
+            raise ValueError(f"reps-plan item {item!r} must be 'stratum=reps'")
+        name, _, value = item.partition('=')
+        name = name.strip()
+        if not name:
+            raise ValueError(f"reps-plan item {item!r} has an empty stratum name")
+        try:
+            reps = int(value.strip())
+        except ValueError as exc:
+            raise ValueError(
+                f"reps-plan item {item!r} has non-integer reps {value.strip()!r}"
+            ) from exc
+        if reps < 0:
+            raise ValueError(f"reps-plan item {item!r} has negative reps {reps}")
+        if name in plan:
+            raise ValueError(f"reps-plan repeats stratum {name!r}")
+        plan[name] = reps
+    return plan
+
+
+def build_strata_plan(
+    strata: list[Stratum],
+    default_reps: int,
+    overrides: dict[str, int] | None = None,
+) -> list[tuple[Stratum, int]]:
+    """Pair each stratum with its rep count, applying per-cell overrides.
+
+    Args:
+        strata: The strata cells to plan for (from :func:`enumerate_strata`).
+        default_reps: Reps assigned to any cell not named in ``overrides``.
+        overrides: Optional ``{stratum_name: reps}`` map (from
+            :func:`parse_reps_spec`) that overrides ``default_reps`` per cell.
+            A cell mapped to ``0`` is emitted zero times.
+
+    Returns:
+        A list of ``(stratum, reps)`` in ``strata`` order.
+
+    Raises:
+        ValueError: If ``default_reps`` is negative or ``overrides`` names a
+            stratum not present in ``strata``.
+    """
+    if default_reps < 0:
+        raise ValueError(f"default_reps must be non-negative, got {default_reps}")
+    overrides = overrides or {}
+    known = {s.name for s in strata}
+    unknown = sorted(set(overrides) - known)
+    if unknown:
+        raise ValueError(
+            f"reps plan names unknown stratum/strata {unknown}; "
+            f"known cells: {sorted(known)}"
+        )
+    return [(s, overrides.get(s.name, default_reps)) for s in strata]
+
+
 def write_manifest(rows: list[StrataManifestRow], path: str) -> None:
     """Write manifest rows to ``path`` as CSV (header from :class:`StrataManifestRow`).
 
@@ -385,12 +465,23 @@ def write_manifest(rows: list[StrataManifestRow], path: str) -> None:
 
 
 def _run_strata(base: dict[str, Any], args: argparse.Namespace) -> None:
-    """Emit ``reps`` configs per stratum plus a manifest CSV."""
+    """Emit configs per stratum plus a manifest CSV.
+
+    Each cell gets ``args.reps`` configs unless ``args.weights`` overrides its
+    count (failure-driven oversampling of floored cells). Emission is rep-major so
+    a uniform plan (no overrides) is byte-identical to the legacy behaviour.
+    """
     strata = enumerate_strata()
+    overrides = parse_reps_spec(args.weights)
+    plan = build_strata_plan(strata, args.reps, overrides)
+    reps_by_name = {stratum.name: reps for stratum, reps in plan}
+    max_reps = max((reps for _, reps in plan), default=0)
     rows: list[StrataManifestRow] = []
     global_index = 0
-    for rep in range(args.reps):
+    for rep in range(max_reps):
         for stratum in strata:
+            if rep >= reps_by_name[stratum.name]:
+                continue
             c, row = build_strata_config(
                 base, stratum, global_index, args.seed, args.distractors
             )
@@ -404,7 +495,9 @@ def _run_strata(base: dict[str, Any], args: argparse.Namespace) -> None:
             global_index += 1
     manifest_path = args.manifest or os.path.join(args.o, 'manifest.csv')
     write_manifest(rows, manifest_path)
-    print(f"strata: wrote {len(rows)} configs ({len(strata)} cells x {args.reps} reps), "
+    n_cells = sum(1 for _, reps in plan if reps > 0)
+    print(f"strata: wrote {len(rows)} configs across {n_cells} cells "
+          f"(default reps={args.reps}, overrides={overrides}), "
           f"distractors={args.distractors}, manifest -> {manifest_path}")
 
 
@@ -432,7 +525,12 @@ def main() -> None:
     ap.add_argument('--mode', choices=['near', 'wide', 'strata'], default='near')
     ap.add_argument('--prefix', default='cfg')
     ap.add_argument('--reps', type=int, default=1,
-                    help='strata mode: configs emitted per stratum cell (12 cells)')
+                    help='strata mode: default configs per cell (used when a cell '
+                         'is not named in --weights)')
+    ap.add_argument('--weights', default='',
+                    help="strata mode: per-cell rep overrides as "
+                         "'stratum=reps,stratum=reps' (e.g. 'sc_rail0=4,"
+                         "sfp_rail0_sfp_port_0=4'); floored cells get more demos")
     ap.add_argument('--distractors', action=argparse.BooleanOptionalAction, default=True,
                     help='strata mode: spawn 1-2 distractor entities on non-target rails')
     ap.add_argument('--manifest', default='',

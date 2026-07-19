@@ -6,6 +6,7 @@ Runs without ROS/Gazebo/GPU (pure dict + PyYAML).
 """
 from __future__ import annotations
 
+import argparse
 import copy
 import csv
 import dataclasses
@@ -526,6 +527,160 @@ class TestEvalRanges(unittest.TestCase):
             c = gen_config.perturb(self.base, i, seed=5, mode="near")
             for j, v in c["robot"]["home_joint_positions"].items():
                 self.assertAlmostEqual(v, base_joints[j], delta=0.02 + 1e-9)
+
+
+class TestParseRepsSpec(unittest.TestCase):
+    """Parsing of the ``--weights`` per-cell reps-plan string."""
+
+    def test_empty_and_blank_give_empty_map(self) -> None:
+        self.assertEqual(gen_config.parse_reps_spec(""), {})
+        self.assertEqual(gen_config.parse_reps_spec("   "), {})
+
+    def test_parses_multiple_items_and_strips(self) -> None:
+        got = gen_config.parse_reps_spec(" sc_rail0=4 , sfp_rail0_sfp_port_0=3 ")
+        self.assertEqual(got, {"sc_rail0": 4, "sfp_rail0_sfp_port_0": 3})
+
+    def test_zero_reps_allowed(self) -> None:
+        self.assertEqual(gen_config.parse_reps_spec("sc_rail1=0"), {"sc_rail1": 0})
+
+    def test_trailing_comma_ignored(self) -> None:
+        self.assertEqual(gen_config.parse_reps_spec("sc_rail0=2,"), {"sc_rail0": 2})
+
+    def test_missing_equals_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            gen_config.parse_reps_spec("sc_rail0")
+
+    def test_non_integer_reps_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            gen_config.parse_reps_spec("sc_rail0=two")
+
+    def test_negative_reps_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            gen_config.parse_reps_spec("sc_rail0=-1")
+
+    def test_empty_name_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            gen_config.parse_reps_spec("=4")
+
+    def test_duplicate_stratum_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            gen_config.parse_reps_spec("sc_rail0=2,sc_rail0=3")
+
+
+class TestBuildStrataPlan(unittest.TestCase):
+    """Per-cell rep planning that drives failure-driven oversampling."""
+
+    def setUp(self) -> None:
+        self.strata = gen_config.enumerate_strata()
+
+    def test_default_reps_applied_uniformly(self) -> None:
+        plan = gen_config.build_strata_plan(self.strata, 2)
+        self.assertEqual([r for _, r in plan], [2] * 12)
+        self.assertEqual([s.name for s, _ in plan],
+                         [s.name for s in self.strata])
+
+    def test_overrides_take_precedence(self) -> None:
+        plan = gen_config.build_strata_plan(
+            self.strata, 2, {"sc_rail0": 4, "sfp_rail0_sfp_port_0": 0})
+        reps = {s.name: r for s, r in plan}
+        self.assertEqual(reps["sc_rail0"], 4)
+        self.assertEqual(reps["sfp_rail0_sfp_port_0"], 0)
+        self.assertEqual(reps["sc_rail1"], 2)  # untouched -> default
+
+    def test_unknown_stratum_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            gen_config.build_strata_plan(self.strata, 1, {"sfp_rail9_sfp_port_0": 3})
+
+    def test_negative_default_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            gen_config.build_strata_plan(self.strata, -1)
+
+    def test_plan_preserves_stratum_order(self) -> None:
+        plan = gen_config.build_strata_plan(self.strata, 1, {"sc_rail1": 5})
+        self.assertEqual([s.name for s, _ in plan],
+                         [s.name for s in self.strata])
+
+    def test_phase2_plan_totals(self) -> None:
+        """The committed Phase-2 plan yields 40 configs with an 8-SC / 32-SFP split."""
+        overrides = gen_config.parse_reps_spec(
+            "sc_rail0=4,sc_rail1=4,"
+            "sfp_rail0_sfp_port_0=4,sfp_rail1_sfp_port_0=4,sfp_rail2_sfp_port_0=4,"
+            "sfp_rail3_sfp_port_0=4,sfp_rail4_sfp_port_0=4,"
+            "sfp_rail0_sfp_port_1=3,sfp_rail1_sfp_port_1=2,sfp_rail2_sfp_port_1=2,"
+            "sfp_rail3_sfp_port_1=2,sfp_rail4_sfp_port_1=3")
+        plan = gen_config.build_strata_plan(self.strata, 0, overrides)
+        reps = {s.name: r for s, r in plan}
+        total = sum(reps.values())
+        sc_total = sum(r for s, r in plan if s.plug == "sc")
+        sfp_total = sum(r for s, r in plan if s.plug == "sfp")
+        self.assertEqual(total, 40)
+        self.assertEqual(sc_total, 8)
+        self.assertEqual(sfp_total, 32)
+        # every cell is explicitly planned (no cell falls back to the 0 default).
+        self.assertTrue(all(r > 0 for r in reps.values()))
+
+
+class TestRunStrataWeighted(unittest.TestCase):
+    """End-to-end strata emission honours the per-cell plan on disk + manifest."""
+
+    def _args(self, outdir: str, **kw: Any) -> argparse.Namespace:
+        base = dict(o=outdir, seed=7, prefix="p2", reps=0, weights="",
+                    distractors=True, manifest="")
+        base.update(kw)
+        return argparse.Namespace(**base)
+
+    def test_uniform_matches_legacy_rep_major(self) -> None:
+        """No overrides + reps=R reproduces the R-per-cell rep-major layout."""
+        base = _synthetic_base_full()
+        with tempfile.TemporaryDirectory() as d:
+            gen_config._run_strata(base, self._args(d, reps=2))
+            with open(Path(d) / "manifest.csv", newline="") as fh:
+                rows = list(csv.DictReader(fh))
+        self.assertEqual(len(rows), 24)  # 12 cells x 2 reps
+        # rep-major: first 12 rows are r0 for every cell, next 12 are r1.
+        self.assertTrue(all(r["config"].endswith("_r0.yaml") for r in rows[:12]))
+        self.assertTrue(all(r["config"].endswith("_r1.yaml") for r in rows[12:]))
+
+    def test_weighted_emits_planned_counts(self) -> None:
+        base = _synthetic_base_full()
+        weights = ("sc_rail0=4,sc_rail1=4,sfp_rail0_sfp_port_0=4,"
+                   "sfp_rail1_sfp_port_0=1,sfp_rail0_sfp_port_1=0")
+        with tempfile.TemporaryDirectory() as d:
+            gen_config._run_strata(base, self._args(d, reps=0, weights=weights))
+            manifest = Path(d) / "manifest.csv"
+            with open(manifest, newline="") as fh:
+                rows = list(csv.DictReader(fh))
+            files = sorted(p.name for p in Path(d).glob("p2_*.yaml"))
+        per_cell: dict[str, int] = {}
+        for r in rows:
+            per_cell[r["stratum"]] = per_cell.get(r["stratum"], 0) + 1
+        self.assertEqual(per_cell.get("sc_rail0"), 4)
+        self.assertEqual(per_cell.get("sc_rail1"), 4)
+        self.assertEqual(per_cell.get("sfp_rail0_sfp_port_0"), 4)
+        self.assertEqual(per_cell.get("sfp_rail1_sfp_port_0"), 1)
+        # reps=0 cells are omitted entirely (default reps=0 too).
+        self.assertNotIn("sfp_rail0_sfp_port_1", per_cell)
+        self.assertNotIn("sfp_rail2_sfp_port_0", per_cell)
+        self.assertEqual(len(rows), 13)
+        self.assertEqual(len(files), 13)  # one YAML per manifest row
+        # config filenames are resumable (unique) and end in _r<rep>.
+        self.assertEqual(len(set(files)), 13)
+
+    def test_manifest_configs_parse_as_campaign_tasks(self) -> None:
+        """collect_campaign's parser consumes the emitted manifest unchanged."""
+        import campaign_lib
+        base = _synthetic_base_full()
+        with tempfile.TemporaryDirectory() as d:
+            gen_config._run_strata(
+                base, self._args(d, weights="sc_rail0=2,sfp_rail0_sfp_port_0=2"))
+            manifest = str(Path(d) / "manifest.csv")
+            tasks = campaign_lib.load_tasks(manifest)
+            sc_tasks = campaign_lib.load_tasks(manifest, plug="sc")
+        self.assertEqual(len(tasks), 4)
+        self.assertEqual(len(sc_tasks), 2)
+        self.assertEqual({t.episode_dir for t in tasks},
+                         {"ep_sc_rail0_r0", "ep_sc_rail0_r1",
+                          "ep_sfp_rail0_sfp_port_0_r0", "ep_sfp_rail0_sfp_port_0_r1"})
 
 
 if __name__ == "__main__":

@@ -1,7 +1,9 @@
 # Progress Log — autonomous research run (started 2026-07-12)
 
 Rule: one entry per 2 hours, max 3 sentences + next-2h plan. Newest on top.
-Latest demo video: `demo/` (none yet — pipeline video pending first milestone).
+Latest demo video: `~/demo/policy_p1_k16_official_1.mp4` (2026-07-18 — first POLICY
+rollout video: p1_k16 on official_1, approach to 0.06 m, engine 14.0; three-camera
+layout matching the oracle demo `~/demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`).
 
 ---
 

@@ -7,6 +7,20 @@ layout matching the oracle demo `~/demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`).
 
 ---
 
+## 2026-07-18 20:20 — Phase-2 collection past halfway; SC floor is pose-dependent
+
+Collection is at 25/40 with 21 KEEPs (SFP oracle 93.4–94.0, zero SFP failures
+since the one early near-miss) and the SC picture is now clear: 2 KEEP
+(93.8, 94.1) / 2 DROP (62.8, 65.0 — both partial-inserts with ins=0 at the
+−0.005 descent floor), i.e. the floor issue is pose-dependent rather than a
+cell-wide failure, and the campaign will still deliver usable SC coverage.
+CAMPAIGNDONE ~22:15, on pace, zero harness incidents.
+
+**Next 2 h:** campaign finishes → retrain both K on ds_phase0+ds_phase2
+(shift-aug winners) → launch the overnight 180-s matched-seed head-to-head
+(p2 winner + p1_k16 + v2_wide) that decides the real best checkpoint; SC
+floor micro-tune logged as top follow-up in SESSION_REPORT.
+
 ## 2026-07-18 18:25 — Post-batch sequence complete; Phase-2 failure-driven collection running
 
 Everything queued on the batch landed in one push: the analysis agent's verdict

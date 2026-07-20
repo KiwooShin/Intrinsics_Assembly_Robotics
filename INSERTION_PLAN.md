@@ -148,6 +148,43 @@ the port." Everything else is reuse of existing infra.
   contain the successful descent-to-seat; isolating it + adding the wrench channel is
   the bet. If BC underfits, DAgger (P-INSERT-2) grows the set for free.
 
+## v2 update (2026-07-20 02:30) — after v1 eval + forensics
+
+**v1 verdict:** two-policy handoff works; specialist better on aligned officials
+(off2 +2.1, off3 +3.8) but −21.6 on misaligned official_1; **0 seats**.
+**Forensics root cause (measured):** the oracle last-inch is *pure vertical descent*
+— net lateral/vertical = **0.014** (0.4 mm lateral vs 27.6 mm vertical over the 55-frame
+window). BC has **no lateral-correction signal to clone**, so it structurally cannot
+re-centre an offset stall (→ official_1 drift). And uniform-L1 over a 15 s window with
+no push-weight averaged to "hold" (predicted |v0| < the 0.01 m/s stall threshold) → never
+pushed → 0 seats. official_3 drove the full 120 mm cap and still ended 0.06 m out ⇒ the
+residual is ~60 mm **lateral**, an axis with <1 mm signal in training.
+
+**v2 decision — HYBRID (lead) + decisive-push retrain:**
+1. Keep the adopted **aux-bearing capped guarded descent** (`v2_auxprobe.pt` +
+   `AIC_GUARDED_AUX=1`) for approach + lateral centring (val lateral 0.86 cm; it already
+   removes the official_1 −24 mode). The specialist runs *downstream* of that re-alignment,
+   so it never sees official_1's OOD raw stall.
+2. **Retrained push specialist** `specialist_push_k4.pt`: `--last-inch-s 6 --k 4 --wrench
+   --pushin-weight 5.0 --pushin-ramp-s 1.5`, enc warm-start. Offline-verified it now
+   predicts a **decisive downward** |v0| ≈ 0.015–0.024 m/s (vs v1's sub-threshold hold),
+   near-zero lateral.
+3. **Sequencing (fastest first-seat verdict):** run the **pure push probe on aligned poses
+   first** (official_2/3 + cfg_005, `AIC_SPECIALIST=1`, no hybrid — no new code); pass = ≥1
+   insertion. Only if the push seats, build the **hybrid phase-2 seam** in
+   `guarded_descent.py` (a second stall latch on the scripted descent → hand the terminal
+   push to the specialist at the re-aligned mouth; `AIC_SPECIALIST_HYBRID` gate, off =
+   today) and run the full gate on all officials.
+4. **Adoption gate:** ≥1 insertion AND official_1 no-regression AND official_2/3 hold;
+   reversible env pointer-swap; then render a demo video.
+5. **Biggest risk:** the oracle last-inch has no lateral/rotational search, so even a
+   decisive push may jam at the mouth like the scripted descent (mouth binding, not push
+   weakness). Mitigation: aligned-pose-first eval (within capture radius); then P-INSERT-2
+   oracle-DAgger seeded at the jam states (the hybrid seam delivers a repeatable mouth pose
+   = the reset DAgger needs); cheap scripted spiral/wiggle insurance under the push.
+Rejected: obs-augment with `tcp_error` (it's controller tracking error ≈ F/K, not a
+port-alignment signal, and not in the recorded corpus).
+
 ## Immediate next actions (sim idle → do offline now)
 
 1. Implement code changes #1 and #3 + tests (offline). 2. Train `specialist_k8.pt`

@@ -1254,6 +1254,31 @@ class SearchConfigTest(unittest.TestCase):
         self.assertTrue(cfg.specialist_enabled)
         self.assertTrue(cfg.enabled)
 
+    def test_vertical_axis_disabled_by_default(self) -> None:
+        """`AIC_SEARCH_VERTICAL` unset leaves the world-vertical override off."""
+        self.assertFalse(GuardedDescentConfig.from_env({}).search_vertical_axis)
+        self.assertFalse(
+            GuardedDescentConfig.from_env({"AIC_SEARCH": "1"}).search_vertical_axis
+        )
+
+    def test_vertical_axis_flag_parses(self) -> None:
+        """`AIC_SEARCH_VERTICAL=1` sets the override; other values leave it off."""
+        self.assertTrue(
+            GuardedDescentConfig.from_env(
+                {"AIC_SEARCH": "1", "AIC_SEARCH_VERTICAL": "1"}
+            ).search_vertical_axis
+        )
+        self.assertFalse(
+            GuardedDescentConfig.from_env(
+                {"AIC_SEARCH": "1", "AIC_SEARCH_VERTICAL": "0"}
+            ).search_vertical_axis
+        )
+        self.assertFalse(
+            GuardedDescentConfig.from_env(
+                {"AIC_SEARCH": "1", "AIC_SEARCH_VERTICAL": "yes"}
+            ).search_vertical_axis
+        )
+
 
 class SearchDescentTest(unittest.TestCase):
     """Spiral geometry, engage gate, wrench back-off, and travel/step guards."""
@@ -1316,6 +1341,37 @@ class SearchDescentTest(unittest.TestCase):
             lateral = offset - axis_u * axial
             self.assertAlmostEqual(float(np.dot(lateral, axis_u)), 0.0, places=9)
             self.assertAlmostEqual(float(np.linalg.norm(lateral)), d.radius, places=9)
+
+    def test_world_vertical_axis_spiral_lies_in_world_xy_plane(self) -> None:
+        """With axis (0,0,-1): push accumulates in world -z, spiral stays in world XY."""
+        d = self._descent(axis=np.array([0.0, 0.0, -1.0]))
+        np.testing.assert_allclose(d.axis, [0.0, 0.0, -1.0])
+        # The lateral basis spans world XY (both u, v have zero z-component) and is
+        # orthonormal + orthogonal to the world-down axis.
+        self.assertAlmostEqual(float(d._u[2]), 0.0, places=12)
+        self.assertAlmostEqual(float(d._v[2]), 0.0, places=12)
+        self.assertAlmostEqual(float(np.dot(d._u, d.axis)), 0.0, places=12)
+        self.assertAlmostEqual(float(np.dot(d._v, d.axis)), 0.0, places=12)
+        self.assertAlmostEqual(float(np.dot(d._u, d._v)), 0.0, places=12)
+        self.assertAlmostEqual(float(np.linalg.norm(d._u)), 1.0, places=12)
+        self.assertAlmostEqual(float(np.linalg.norm(d._v)), 1.0, places=12)
+        contact = np.array([6.0, 0.0, 0.0])  # |F-baseline| = 6 N (engaged, < 12 N)
+        radii = []
+        for _ in range(8):
+            tgt = d.advance(force=contact, substeps=1)[-1]
+            offset = tgt[:3] - self.ANCHOR
+            # The axial push is pure world -z; the lateral remainder lies in world XY.
+            axial = float(offset[2])
+            self.assertAlmostEqual(axial, -d.z_step * d.steps, places=12)
+            lateral = offset - np.array([0.0, 0.0, axial])
+            self.assertAlmostEqual(float(lateral[2]), 0.0, places=12)  # world-XY only
+            self.assertAlmostEqual(float(np.dot(lateral, d.axis)), 0.0, places=12)  # _|_ down
+            self.assertAlmostEqual(float(np.linalg.norm(lateral)), d.radius, places=12)
+            radii.append(d.radius)
+        # Radius grows monotonically (as it does for any axis) and never negative.
+        for a, b in zip(radii, radii[1:]):
+            self.assertLessEqual(a, b + 1e-12)
+        self.assertGreater(radii[-1], 0.0)
 
     def test_z_accumulates_downward_within_cap_then_holds(self) -> None:
         """The Z push accumulates downward, never exceeds travel_cap, then HOLDs."""
@@ -1542,6 +1598,125 @@ class SearchSwitchTest(unittest.TestCase):
             logged = logged or any("could not be estimated" in ln for ln in step.log_lines)
         self.assertFalse(ctrl.active)
         self.assertTrue(logged)
+
+    # --- World-vertical search override (AIC_SEARCH_VERTICAL) -------------------
+    DIAG_STEP = np.array([-0.006, -0.005, -0.006])  # ~53deg off vertical
+
+    def _run_diagonal(self, ctrl: GuardedDescentController, substeps: int = 5) -> list:
+        """Drive a DIAGONAL approach then a stall so the motion axis is diagonal.
+
+        Args:
+            ctrl: The controller under test.
+            substeps: Sub-poses commanded per cycle.
+
+        Returns:
+            The per-cycle :class:`GuardedStep` results.
+        """
+        steps = []
+        pos = np.array([0.15, -0.05, 0.60])
+        force = np.array([19.0, 0.0, 0.0])
+        quat = np.array([0.0, 0.0, 0.0, 1.0])
+        for i in range(120):
+            t = i * 0.275
+            if t < 19.0:
+                pos = pos + self.DIAG_STEP
+            steps.append(ctrl.cycle(t, pos, quat, force, substeps=substeps))
+        return steps
+
+    def test_vertical_off_uses_diagonal_motion_axis(self) -> None:
+        """Override off: the search still descends along the (diagonal) motion axis."""
+        ctrl = GuardedDescentController(
+            self._config(search_enabled=True, search_vertical_axis=False)
+        )
+        self._run_diagonal(ctrl)
+        self.assertIsInstance(ctrl.descent, SearchDescent)
+        expected = self.DIAG_STEP / np.linalg.norm(self.DIAG_STEP)
+        np.testing.assert_allclose(ctrl.descent.axis, expected, atol=1e-9)
+        self.assertGreater(abs(float(ctrl.descent.axis[0])), 0.3)  # genuinely diagonal
+
+    def test_vertical_off_is_byte_identical_to_unset(self) -> None:
+        """`search_vertical_axis=False` reproduces the default search path exactly."""
+        ctrl_off = GuardedDescentController(
+            self._config(search_enabled=True, search_vertical_axis=False)
+        )
+        ctrl_default = GuardedDescentController(self._config(search_enabled=True))
+        steps_off = self._run_diagonal(ctrl_off)
+        steps_default = self._run_diagonal(ctrl_default)
+        np.testing.assert_allclose(ctrl_off.descent.axis, ctrl_default.descent.axis)
+        for a, b in zip(steps_off, steps_default):
+            if a.targets is None:
+                self.assertIsNone(b.targets)
+            else:
+                np.testing.assert_allclose(a.targets, b.targets)
+
+    def test_vertical_on_descends_world_down_regardless_of_motion(self) -> None:
+        """Override on: the search descends world -z with a world-XY spiral, not the diagonal."""
+        ctrl = GuardedDescentController(
+            self._config(search_enabled=True, search_vertical_axis=True)
+        )
+        steps = self._run_diagonal(ctrl)
+        self.assertIsInstance(ctrl.descent, SearchDescent)
+        d = ctrl.descent
+        # Push axis forced to world-down despite the diagonal approach motion.
+        np.testing.assert_allclose(d.axis, [0.0, 0.0, -1.0], atol=1e-12)
+        # Spiral basis lies in the world XY plane, orthonormal and _|_ to (0,0,-1).
+        self.assertAlmostEqual(float(d._u[2]), 0.0, places=12)
+        self.assertAlmostEqual(float(d._v[2]), 0.0, places=12)
+        self.assertAlmostEqual(float(np.dot(d._u, d.axis)), 0.0, places=12)
+        self.assertAlmostEqual(float(np.dot(d._v, d.axis)), 0.0, places=12)
+        self.assertAlmostEqual(float(np.dot(d._u, d._v)), 0.0, places=12)
+        # Through the controller the commanded push runs straight down in world -z,
+        # with x, y pinned to the anchor (no contact delta to grow the spiral yet).
+        idx = next(i for i, s in enumerate(steps) if s.triggered_this_cycle)
+        anchor = d.anchor_position
+        post = [s for s in steps[idx:] if s.targets is not None]
+        zs = [float(s.targets[-1][2]) for s in post]
+        for s in post:
+            np.testing.assert_allclose(s.targets[-1][:2], anchor[:2], atol=1e-9)
+        for a, b in zip(zs, zs[1:]):
+            self.assertLessEqual(b, a + 1e-12)  # world -z monotone
+        self.assertLess(zs[-1], float(anchor[2]))  # descended below the anchor
+        # Under contact the world-XY spiral grows as before (radius 0 -> positive),
+        # while every safety guard (still DESCEND, below travel cap) is intact.
+        self.assertEqual(d.phase, GuardedPhase.DESCEND)
+        base = d.baseline_force if d.baseline_force is not None else np.zeros(3)
+        contact = base + np.array([6.0, 0.0, 0.0])  # |F-baseline| = 6 N: engaged, < 12 N
+        r_before = d.radius
+        for _ in range(6):
+            tgt = d.advance(force=contact, substeps=1)[-1]
+        self.assertGreater(d.radius, r_before)  # spiral grew under contact
+        lateral = tgt[:3] - anchor - d.axis * (d.z_step * d.steps)
+        self.assertAlmostEqual(float(lateral[2]), 0.0, places=12)  # world-XY offset
+        self.assertAlmostEqual(float(np.dot(lateral, d.axis)), 0.0, places=12)
+
+    def test_vertical_on_freezes_orientation_at_anchor(self) -> None:
+        """The vertical override changes only translation; orientation stays at the anchor."""
+        ctrl = GuardedDescentController(
+            self._config(search_enabled=True, search_vertical_axis=True)
+        )
+        steps = self._run_diagonal(ctrl)
+        anchor_quat = ctrl.descent.anchor_quaternion
+        for s in steps:
+            if s.targets is not None:
+                for sub in s.targets:
+                    np.testing.assert_allclose(sub[3:], anchor_quat, atol=1e-12)
+
+    def test_vertical_engages_even_without_motion_axis(self) -> None:
+        """The override engages the search world-down even when no approach motion was seen."""
+        ctrl = GuardedDescentController(
+            self._config(search_enabled=True, search_vertical_axis=True)
+        )
+        pos = np.array([0.15, -0.05, 0.60])  # never moves -> no motion axis
+        force = np.array([19.0, 0.0, 0.0])
+        quat = np.array([0.0, 0.0, 0.0, 1.0])
+        engaged = False
+        for i in range(120):
+            step = ctrl.cycle(i * 0.275, pos, quat, force, substeps=5)
+            engaged = engaged or any("[search] HANDOFF" in ln for ln in step.log_lines)
+        self.assertTrue(ctrl.active)
+        self.assertTrue(engaged)
+        self.assertIsInstance(ctrl.descent, SearchDescent)
+        np.testing.assert_allclose(ctrl.descent.axis, [0.0, 0.0, -1.0], atol=1e-12)
 
 
 if __name__ == "__main__":

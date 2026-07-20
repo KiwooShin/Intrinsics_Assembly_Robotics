@@ -106,6 +106,13 @@ DEFAULT_SEARCH_TRAVEL_CAP: float = 0.06  # m; max total Z push (search depth) be
 DEFAULT_SEARCH_MAX_STEPS: int = 0  # cap on push steps (0 = unlimited).
 DEFAULT_SEARCH_YAW_AMP: float = 0.0  # rad; optional tiny yaw-dither amplitude (0 = frozen).
 DEFAULT_SEARCH_OMEGA: float = 0.4  # rad; spiral angle advanced per in-contact cycle.
+# World-down unit axis for the optional vertical-search override (``AIC_SEARCH_VERTICAL``).
+# The SFP/SC ports open ~world-vertical (last-inch forensics: pure world -z descent,
+# <1mm lateral), so when the flag is set the spiral descends straight -z with its
+# lateral plane in world XY instead of following the (possibly diagonal) motion-axis
+# estimate. ``_lateral_basis((0, 0, -1))`` already yields a world-XY ``(u, v)`` pair,
+# so passing this axis to :class:`SearchDescent` puts the whole spiral in world X/Y.
+_WORLD_DOWN_AXIS: np.ndarray = np.array([0.0, 0.0, -1.0])
 
 # Per-trial guarded telemetry mirror written in the process CWD (the trial dir).
 DEFAULT_TRACE_FILENAME: str = "guarded_trace.log"
@@ -1240,6 +1247,14 @@ class GuardedDescentConfig:
         search_max_steps: Cap on push steps before holding (0 = unlimited).
         search_yaw_amp: Amplitude (rad) of an optional yaw dither about the axis
             (0 = orientation frozen at the anchor).
+        search_vertical_axis: Force the spiral search to descend along the world
+            vertical ``(0, 0, -1)`` with its lateral spiral in the world XY plane
+            (``AIC_SEARCH_VERTICAL=1``), applying the vertical-port prior instead
+            of following the (possibly diagonal) motion-axis estimate. Scopes to
+            the scripted :class:`SearchDescent` ONLY; the aux-bearing
+            :class:`GuardedDescent` and learned :class:`SpecialistDescent` paths
+            are untouched. Orientation stays frozen at the anchor -- only the
+            translation axis changes. Default False (byte-identical when off).
     """
 
     enabled: bool = False
@@ -1277,6 +1292,7 @@ class GuardedDescentConfig:
     search_travel_cap: float = DEFAULT_SEARCH_TRAVEL_CAP
     search_max_steps: int = DEFAULT_SEARCH_MAX_STEPS
     search_yaw_amp: float = DEFAULT_SEARCH_YAW_AMP
+    search_vertical_axis: bool = False
 
     def stiffness(self) -> list[float] | None:
         """Return the descent stiffness list, or None to keep the caller default.
@@ -1318,7 +1334,9 @@ class GuardedDescentConfig:
         PRECEDENCE over ``AIC_SPECIALIST`` when both are set), ``AIC_SEARCH_RADIUS``,
         ``AIC_SEARCH_TURNS``, ``AIC_SEARCH_Z_STEP``, ``AIC_SEARCH_OMEGA``,
         ``AIC_SEARCH_ENGAGE_FORCE``, ``AIC_SEARCH_TRAVEL_CAP``,
-        ``AIC_SEARCH_MAX_STEPS``, ``AIC_SEARCH_YAW_AMP``.
+        ``AIC_SEARCH_MAX_STEPS``, ``AIC_SEARCH_YAW_AMP``, ``AIC_SEARCH_VERTICAL``
+        (``"1"`` forces the search to descend along world-vertical ``(0, 0, -1)``
+        with its spiral in the world XY plane; default off = motion-axis descent).
 
         Args:
             env: Environment mapping (e.g. ``os.environ``).
@@ -1401,6 +1419,7 @@ class GuardedDescentConfig:
             search_travel_cap=_f("AIC_SEARCH_TRAVEL_CAP", DEFAULT_SEARCH_TRAVEL_CAP),
             search_max_steps=_i("AIC_SEARCH_MAX_STEPS", DEFAULT_SEARCH_MAX_STEPS),
             search_yaw_amp=_f("AIC_SEARCH_YAW_AMP", DEFAULT_SEARCH_YAW_AMP),
+            search_vertical_axis=env.get("AIC_SEARCH_VERTICAL", "0").strip() == "1",
         )
 
 
@@ -1923,6 +1942,14 @@ class GuardedDescentController:
         needs a motion axis: when none can be estimated it stays on the learned path
         (returns False) rather than searching in an unknown direction.
 
+        When :attr:`GuardedDescentConfig.search_vertical_axis` is set the push axis
+        is instead forced to world-vertical ``(0, 0, -1)`` (the vertical-port prior),
+        with the spiral lateral basis in the world XY plane. That override is
+        self-directed -- it does not consult the motion-axis estimate -- so the
+        search engages even when no approach motion was recorded. Every
+        :class:`SearchDescent` safety guard (engage force, hard back-off, travel cap,
+        max steps) is unchanged, and the orientation stays frozen at the anchor.
+
         Args:
             t: Elapsed time (s).
             pos: Anchor TCP position ``(3,)`` (m).
@@ -1932,18 +1959,25 @@ class GuardedDescentController:
 
         Returns:
             True when the spiral search engaged; False (staying on the learned path)
-            when no approach axis is available.
+            when no approach axis is available and the vertical override is off.
         """
-        axis = self.axis_estimator.estimate()
-        if axis is None:
-            if not self._axis_unavailable_logged:
-                self._axis_unavailable_logged = True
-                logs.append(
-                    f"[search] stall detected at t={t:.1f}s but approach axis "
-                    f"could not be estimated ({len(self.axis_estimator)} samples); "
-                    f"staying on the learned path"
-                )
-            return False
+        if self.config.search_vertical_axis:
+            # Vertical-port prior: descend straight world -z with the spiral in the
+            # world XY plane, independent of the (possibly diagonal) motion axis.
+            # _lateral_basis((0, 0, -1)) yields a world-XY (u, v), so the lateral
+            # offset stays in world X/Y while the push accumulates in world -z.
+            axis = _WORLD_DOWN_AXIS.copy()
+        else:
+            axis = self.axis_estimator.estimate()
+            if axis is None:
+                if not self._axis_unavailable_logged:
+                    self._axis_unavailable_logged = True
+                    logs.append(
+                        f"[search] stall detected at t={t:.1f}s but approach axis "
+                        f"could not be estimated ({len(self.axis_estimator)} samples); "
+                        f"staying on the learned path"
+                    )
+                return False
         self.descent = SearchDescent(
             axis=axis,
             anchor_position=pos,

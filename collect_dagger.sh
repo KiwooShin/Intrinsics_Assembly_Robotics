@@ -237,12 +237,19 @@ for line in "${TASKS[@]}"; do
   # filter: we keep every stall (the whole point is the non-seating distribution).
   # The entrance frame is auto-detected (target-scoped via /scoring/tf); pass
   # PORT_FRAME=... to force a specific frame if a bag has distractor ambiguity.
-  # The target port name (e.g. sfp_port_0) disambiguates the mount's two entrance
-  # frames; the /scoring/tf scoping alone does not narrow same-mount ports.
+  # The board hosts multiple NIC mounts, each with an sfp_port_0/1 entrance frame,
+  # so port_name alone is ambiguous. Build the exact entrance frame from the
+  # config's target_module_name + port_name (frame = task_board/{module}/{port}
+  # _link_entrance) and pass it as --port-frame (overrides detection, no ambiguity).
+  # PORT_FRAME env still overrides if the caller sets it.
   PORT_NAME=$(grep -m1 -E '^[[:space:]]*port_name:' "$CFG" | awk '{print $2}')
+  MODULE_NAME=$(grep -m1 -E '^[[:space:]]*target_module_name:' "$CFG" | awk '{print $2}')
+  AUTO_FRAME=""
+  [ -n "$PORT_NAME" ] && [ -n "$MODULE_NAME" ] && \
+    AUTO_FRAME="task_board/${MODULE_NAME}/${PORT_NAME}_link_entrance"
+  USE_FRAME=${PORT_FRAME:-$AUTO_FRAME}
   "$PY" "$RELABEL" "$BAG" "$EP" \
-      ${PORT_NAME:+--port-name "$PORT_NAME"} \
-      ${PORT_FRAME:+--port-frame "$PORT_FRAME"} \
+      ${USE_FRAME:+--port-frame "$USE_FRAME"} \
       --campaign-log "$OUT/campaign_log.csv" \
       --config "$CFG" --stratum "$STRATUM" --plug "$TPLUG" --rep "$REP" \
       > "${DLOG}.relabel" 2>&1

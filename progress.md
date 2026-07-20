@@ -13,6 +13,50 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-20 16:20 — Run #3 cycle 2: localization gate FAILED; disasm unblocked; one decisive first-seat cycle
+
+**Avg score:** still **0 insertions** (~168 trials); banked floor unchanged (capped-aux
+ab5 **IQM 35.8** vs 23.1). This window RESOLVED the localization gate and unblocked the
+disasm path; no new engine scores yet (decisive disasm cycle now running).
+
+| Experiment | Verdict | Key metric |
+| --- | --- | --- |
+| DAgger localization retrain + held-out eval (SFP/SC separate) | **FAIL** | SFP median lateral **37 mm** (40 mm at stall point, 1/6 eps <10 mm); SC **201 mm**. Need ~2–5 mm. |
+| Disasm-reversal correctness (4-agent adversarial workflow) | GO_WITH_FIXES | reversal math correct; 1 silent-corruption path fixed (latch-reject gate) |
+| Disasm latch blocker (SFP welded during collection) | **DIAGNOSED + FIXED** | 21 s descent-dwell bug + TouchPlugin welds seat plate; fixed descent + disabled latch for collection → clean verify (insertion_events=0, seat_frame=n-1) |
+| Lift-translate band widened for 13 mm | done | lateral 8→16 mm, axial-clear 5→14 mm, lift_frac 0.2→0.45 |
+
+**What's missing:** the seat — and two analysis agents (results-forensics +
+strategy-critique) converged that it is **likely unreachable sensor-legally**:
+- **Localization is genuine occlusion, not covariate shift.** The head was trained on
+  the policy's OWN deploy-stall distribution (the covariate fix) and *still* medians
+  37–40 mm at the stall point. The plug body occludes the port at the last inch; wrench
+  carries no pre-contact bearing. The port is observable early, never at the stall.
+- **13 mm is the crux.** The nearest first-seat-reachable pose is official_2 at 13 mm
+  lateral (base policy's own stall). That exceeds every measured/literature capture
+  radius — friction wall K_eff≈350 N/m → ~4.4 N lateral (creep-and-stall ~5 mm); spiral
+  r=18 mm already seated 0/3; force-reactive reliable ~5 mm, ~10 mm with slow spiral
+  (arXiv:2204.07776: 66–78%@5 mm → 37–63%@10 mm). Ground-truth port TF is **eval-illegal**
+  (challenge_rules §State-Leaking) so no scripted aim. The disasm specialist's only new
+  lever is the free-space **lift-translate** maneuver (now widened to ~16 mm) — but
+  without localization it cannot perceive the correction *direction*, so it must
+  force-search, which is uncertain at 13 mm.
+- **>90 is unreachable without a seat**; capped-aux **IQM 35.8 is very likely the final
+  shippable number** regardless of branch.
+
+**Next 4 h:** run the **ONE decisive first-seat cycle**, time-boxed to ~Jul 21 06:00:
+widened SFP disasm collection (LIMIT=18, ~2 h, running) → REVERT the collection-only
+latch-disable xacro → train specialist k8 **with AND without --wrench** (reversed wrench
+is non-physical per AutoMate 2407.08028; adjudicate on the in-sim SEAT eval, NOT val L1)
+→ **disasm-standalone on aligned official_2/3 + cfg_005**. ≥1 insertion = **FIRST SEAT**
+(a ~3-pose capability demo, not a suite-wide gain; general 30–60 mm stalls stay
+unseatable). **Kill (tightened):** 0 seats on aligned poses → retire insertion (localization
+dead + force-search can't close 13 mm), pivot the remaining ~35 h to **raising the average**
+(dead-band cfg_000/004/008, cfg_001 retrain, SC oracle repair) + submission hardening
+(capped-aux banked; phase_1 port/Docker needs the user's portal). SOTA/refs: AutoMate
+2407.08028, InsertionNet 2104.14223/2.0 2203.01153, IndustReal 2305.17110, seam-fill
+capture-radius 2204.07776, DAgger 2606.10385.
+
 ## 2026-07-20 12:00 — Run #3 cycle 1: seat-execution plan sharpened (2 analysis agents); collection 32/48
 
 **Avg score:** still **0 insertions** (~165 trials); banked floor unchanged

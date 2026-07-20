@@ -1021,3 +1021,28 @@ specialist (wrench ablation) -> disasm-standalone FIRST-SEAT test on aligned pos
 Only if that ALSO yields 0 seats does the full kill fire (ship capped-aux IQM 35.8).
 Refs: covariate-shift DAgger (2606.10385), seam-fill capture-radius 2204.07776,
 AutoMate 2407.08028. Still 0 seats; capped-aux IQM 35.8 banked.
+
+## 2026-07-20 16:20 — Run #3 cycle 2: disasm unblocked, decisive first-seat cycle running
+
+Localization gate FAILED (SFP 37mm/SC 201mm held-out lateral; details 15:10 entry).
+Disasm-reversal correctness workflow (4 adversarial agents) → GO_WITH_FIXES; applied
+latch-reject gate (8ad0636). Latch blocker (SFP welded during collection) DIAGNOSED via
+deep code trace: (1) 21s descent-DWELL bug — SFP loop re-commanded a constant final-depth
+target 426x (calc_gripper_pose ignores z_offset when target_position_base set) → plug held
+at seat plate ~21s; (2) TouchPlugin welds tip↔seat-plate after 1s contact. FIXED (f72e4ea):
+SFP descent tracks z_offset (gradual); no gz enable service exists so disabled TouchPlugin
+via NIC-mount xacro enabled=false (collection-only, MUST revert before scoring). Verify #4
+CLEAN: insertion_events=0, seat_frame=n-1, z_range 139mm, frac_static 39% (was ~80%),
+wrenches present.
+
+Two 16:00 analysis agents (forensics + strategy) converged: 13mm (official_2, nearest
+reachable) is above every capture radius (~5mm friction wall, spiral r18→0/3, force-reactive
+~5-10mm 2204.07776); localization is genuine OCCLUSION (head trained on deploy-stall dist
+still 37-40mm) so the specialist can't perceive correction DIRECTION sensor-legally (port TF
+eval-illegal). >90 unreachable without a seat; capped-aux IQM 35.8 very likely final.
+DECISION: run ONE decisive disasm cycle (widened lift-translate band lateral→16mm axial-clear
+→14mm lift_frac→0.45, commit e741356; collection LIMIT=18 running) → specialist k8 ±wrench
+(adjudicate on SEAT eval) → standalone aligned official_2/3+cfg_005. ≥1 seat=FIRST SEAT
+(≤3-pose demo). 0 seats → retire insertion, pivot ~35h to raise-avg + submission. Boxed to
+Jul 21 ~06:00. Train specialist with --last-inch-s (39% static frames are far-standoff
+staging). Still 0 seats; capped-aux banked.

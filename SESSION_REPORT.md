@@ -750,3 +750,38 @@ confirmation + valid off3; guard neutralized via AIC_GUARDED_MIN_RUNTIME) then
 guarded-on-k16 ×3 (first seat attempt from the best-ever clean 0.05 m
 handoff). Gate: ≥1 insertion event → Track S control-solvable → GuardedInsert
 hardening.
+
+## 2026-07-19 19:10 — Run #2 cycle 2: the aux-bearing arc — bearing solved, depth próxima, seat still open
+
+**Arc summary (all on frozen v2_wide action weights — controlled A/B):**
+
+| Probe | off1 (n=3) | off2 (n=3) | off3 (n=3) | contacts | seats |
+|---|---|---|---|---|---|
+| Blind motion-axis (morning) | 11.3 (−24 ×3/3) | 42.8±0.1 | 35.4±0.2 | off1 3/3 graze | 0/9 |
+| Aux-bearing, 30mm cap | 33.8 (graze 1/3) | 39.4 | 33.8 | 1/9 | 0/9 |
+| Aux-bearing, 120mm cap | 32.0 (43.3 best-ever) | 26.9 (one 1.0 miss) | 32.9 | ~1/9 | 0/9 |
+
+**What was proven:** (1) The learned port-offset head (frozen encoder, hindsight
+terminal-TCP labels, val lateral 0.86 cm) gives a usable bearing — off1's
+3/3 mount grazes dropped to 1/3 and its clean reps hit 41–43 (best-ever,
+tier_3 at the 25 proximity ceiling, distances 0.04–0.05 m). (2) Depth
+prediction is unreliable (|offset| 10.5→50.8 mm for a ~60 mm gap), so the
+|offset|+margin travel cap starved the capped runs; uncapping recovered depth
+but exposed variance (an off2 miss; off1 r2 13.5). (3) Even at full 120 mm
+travel + wrench guard the plug holds 0.04 m out — **the last 4 cm needs a
+better axis, not more travel**, hence the 6-D fix.
+
+**6-D axis wiring COMMITTED** (explicit axis channel decoupled from depth;
+fixed AIC_GUARDED_AUX_TRAVEL cap; per-trial guarded_trace.log; 152 ros tests).
+6-D frozen retrain launched 19:08; F2 probe (FINAL seat iteration per
+kill-rule) follows. If 0 seats: bank the capped config (structurally removes
+the off1 −24 mode, byte-identical off-stall) and pivot overnight to
+PLAN_SCORE90 P2 (adoption gauge, SC oracle repair, MimicGen coverage).
+
+**Also this cycle:** v3fix retrains REJECTED at n=3 (k8 off1 −23 unshippable;
+k16 unreliable: off1 2/3 collisions, off2 5.0–41.3 variance) — v2_wide remains
+the base; the k16 gauge 41.7 "best-ever" was another n=1 mirage. Ladder:
+capped-aux composite ≈25.0 vs baseline 23.1 (within noise); planning agent's
+key scope note: ab5 officials are RECONSTRUCTED harder poses — the 119.4
+true-official reference needs its own aux-guard run before any submission call
+(by ~Jul 24; phase_1 port by Jul 26-27).

@@ -13,6 +13,25 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-19 19:15 — Run #2 cycle 2: learned port bearing works (graze 3/3→1/3), seat still open
+
+**Avg score (n=9 officials per arm, 180 s):** blind-descent 29.8 → aux-bearing
+capped 35.7 ≈ bare v2_wide 35.8; uncapped 30.6 (variance up); gauge composite
+≈25.0 vs baseline 23.1±2.1 (n=15) — within noise, rung 40 not yet claimed;
+0 insertions in 27 probe trials today.
+
+**What's missing:** (1) the seat — plug reliably reaches 0.04-0.05 m clean but
+the final 4 cm needs an accurate insertion AXIS (depth prediction unreliable
+10-51 mm; 6-D explicit-axis head trained+wired, F2 probe = final iteration);
+(2) adoption-grade evidence (all deltas < IQM+5 at n=3); (3) SC oracle + the
+cfg_001 coverage hole untouched (overnight P2).
+
+**Next 4 h:** F2 6-D probe (9 trials; gate ≥1 seat) → bank winner (capped aux
+config removes the off1 −24 mode regardless) → overnight cycle B adoption
+gauge (n=3 ab5 vs 23.1) → cycle C SC oracle repair (floor −0.007 +
+pose-conditioned waypoint + zero-contact revalidation). Cycles 00:00/04:00
+with multi-agent analysis each.
+
 ## 2026-07-19 16:00 — Run #2 cycle 1: probe answered (bearing is the gap); K specialists found
 
 **Avg score:** gauge (eval_suite_ab5) baseline v2_wide **23.1±2.1** (n=15);

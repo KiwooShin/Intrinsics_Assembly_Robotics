@@ -65,11 +65,13 @@ SFP_DESCENT_FLOOR_Z = -0.015
 # to ~-0.007 (2 mm deeper) and re-validate zero-contact. -0.007 stays well inside
 # the -0.01564 entrance offset so it cannot reach the port body.
 #
-# TODO(YAWFIX): if the post-B revalidation (4-6 SC-pose trials) still shows
-# insertion_events == 0 with contacts == 0, lower further toward -0.010; if any
-# contact reappears, raise back toward -0.005. Kept a named constant so tuning is
-# a one-line change and requires no ROS.
-SC_DESCENT_FLOOR_Z = -0.007
+# Revalidation 2026-07-19 (results/sc_oracle_reval, 7 SC poses at -0.007): 2 full
+# seats (official_3, cfg_007 -- both sc_port_1) and 4 partial insertions + 1
+# near-miss all stopping exactly 0.01 m short, zero contacts in every trial.
+# The sc_port_0-module poses under-reach uniformly, so the floor moves 3 mm
+# deeper. -0.010 still stays inside the -0.01564 entrance offset. If any contact
+# appears at -0.010, raise back toward -0.007; do not deepen further.
+SC_DESCENT_FLOOR_Z = -0.010
 
 # --- Pose-conditioned SC entrance-waypoint geometry (used by sc_entrance_waypoint) ---
 # The SC entrance frame's local +z axis points *into* the port: the entrance link

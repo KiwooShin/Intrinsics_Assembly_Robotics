@@ -47,12 +47,14 @@ class ResolvePortApproachTest(unittest.TestCase):
             a.frame, "task_board/sc_port_0/sc_port_base_link_entrance"
         )
         self.assertEqual(a.descent_floor_z, ct.SC_DESCENT_FLOOR_Z)
-        # Floor fix: -0.005 was too shallow (partial-insert, ins==0); -0.007 seats
-        # ~2 mm deeper while staying well inside the -0.01564 entrance offset.
-        self.assertEqual(a.descent_floor_z, -0.007)
+        # Floor history: -0.005 partial-inserted off-official poses; -0.007 seated
+        # sc_port_1 poses but left sc_port_0 poses exactly 0.01 m short (7-pose
+        # revalidation, zero contacts); -0.010 covers the under-reach while
+        # staying inside the -0.01564 entrance offset.
+        self.assertEqual(a.descent_floor_z, -0.010)
 
     def test_sc_descent_floor_constant_value(self) -> None:
-        self.assertAlmostEqual(ct.SC_DESCENT_FLOOR_Z, -0.007)
+        self.assertAlmostEqual(ct.SC_DESCENT_FLOOR_Z, -0.010)
         # Must stay shallower than the -0.01564 entrance offset so it never reaches
         # the port body (which caused the original -0.015 ram).
         self.assertGreater(ct.SC_DESCENT_FLOOR_Z, -0.01564)

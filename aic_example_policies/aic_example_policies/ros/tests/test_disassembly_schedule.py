@@ -172,8 +172,10 @@ class BuildScheduleTest(unittest.TestCase):
                 d.roll_pitch_min_rad <= cfg.roll_amp_rad <= d.roll_pitch_max_rad
             )
             n_lift += int(cfg.lift_translate)
-        # ~20% lift-translate-reseat variants (Bernoulli(lift_frac=0.2)).
-        self.assertTrue(0.10 <= n_lift / 200.0 <= 0.30)
+        # Empirical lift-translate fraction tracks Bernoulli(lift_frac) within a
+        # sampling tolerance; derive the band from the default so the test does not
+        # pin a specific lift_frac value.
+        self.assertTrue(d.lift_frac - 0.12 <= n_lift / 200.0 <= d.lift_frac + 0.12)
 
 
 class ConfigValidationTest(unittest.TestCase):

@@ -72,14 +72,22 @@ ROLL_PITCH_MIN_RAD: float = 0.02
 ROLL_PITCH_MAX_RAD: float = 0.05
 
 # Fraction of episodes that use the lift-translate-reseat recovery variant.
-DEFAULT_LIFT_FRAC: float = 0.2
+# Raised 0.2 -> 0.45 (2026-07-20): the seat-feasibility forensics showed the ONLY
+# first-seat-reachable pose is official_2 at 13 mm lateral, which exceeds the
+# spiral's friction-limited ~5 mm; the free-space lift-translate is the sole lever
+# that can teach a >8 mm correction, so weight the demos toward it.
+DEFAULT_LIFT_FRAC: float = 0.45
 
 # Lift-translate-reseat magnitudes (m): axial lift to clear the bore, then the
-# lateral translate in near-free-space.
-LIFT_AXIAL_MIN_M: float = 0.003
-LIFT_AXIAL_MAX_M: float = 0.005
+# lateral translate in near-free-space. Widened 2026-07-20 to teach corrections up
+# to ~16 mm (covering official_2's 13 mm + margin). The axial lift must exceed the
+# ~13 mm bore engagement (retract starts ~-0.013) so the lateral translate is
+# genuinely free-space above the mouth and does not bind against the bore wall;
+# hence lift_axial 10-14 mm (was 3-5 mm, which translated while still in the bore).
+LIFT_AXIAL_MIN_M: float = 0.010
+LIFT_AXIAL_MAX_M: float = 0.014
 LIFT_LATERAL_MIN_M: float = 0.003
-LIFT_LATERAL_MAX_M: float = 0.008
+LIFT_LATERAL_MAX_M: float = 0.016
 
 
 @dataclasses.dataclass(frozen=True)

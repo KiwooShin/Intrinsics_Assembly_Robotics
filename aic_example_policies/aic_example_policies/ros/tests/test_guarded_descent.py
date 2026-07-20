@@ -23,9 +23,14 @@ import unittest.mock
 
 import numpy as np
 
+from aic_example_policies.ros import pose_integration
 from aic_example_policies.ros.guarded_descent import (
     DEFAULT_AUX_FIXED_TRAVEL,
     DEFAULT_CONTACT_FORCE_THRESHOLD,
+    DEFAULT_SPECIALIST_DT,
+    DEFAULT_SPECIALIST_EXEC_STEPS,
+    DEFAULT_SPECIALIST_MAX_STEPS,
+    DEFAULT_SPECIALIST_TRAVEL_CAP,
     DEFAULT_STEP_SIZE,
     DEFAULT_TRAVEL_CAP,
     ApproachAxisEstimator,
@@ -34,6 +39,7 @@ from aic_example_policies.ros.guarded_descent import (
     GuardedDescentController,
     GuardedPhase,
     GuardedTraceWriter,
+    SpecialistDescent,
     StallDetector,
 )
 
@@ -844,6 +850,326 @@ class GuardedTraceWriterTest(unittest.TestCase):
             ):
                 writer = GuardedTraceWriter(explicit)
             self.assertEqual(writer.path, explicit)
+
+
+class _ChunkProvider:
+    """Fake specialist provider returning a fixed base_link TCP-velocity chunk.
+
+    Mirrors the :class:`SpecialistActionProvider` protocol (``predict_chunk``) so
+    the specialist descent can be exercised with no torch/checkpoint. ``chunk`` is
+    a ``(K, 6)`` twist array; passing ``None`` emulates "no observation yet".
+    """
+
+    def __init__(self, chunk: np.ndarray | None) -> None:
+        self.chunk = None if chunk is None else np.asarray(chunk, dtype=np.float64)
+        self.calls = 0
+
+    def predict_chunk(self, position, quaternion):
+        self.calls += 1
+        return self.chunk
+
+
+class SpecialistConfigTest(unittest.TestCase):
+    """Env parsing for the learned insertion specialist (``AIC_SPECIALIST``)."""
+
+    def test_disabled_by_default(self) -> None:
+        """An empty environment leaves the specialist off with defaults."""
+        cfg = GuardedDescentConfig.from_env({})
+        self.assertFalse(cfg.specialist_enabled)
+        self.assertFalse(cfg.enabled)
+        self.assertEqual(cfg.specialist_travel_cap, DEFAULT_SPECIALIST_TRAVEL_CAP)
+        self.assertEqual(cfg.specialist_max_steps, DEFAULT_SPECIALIST_MAX_STEPS)
+        self.assertEqual(cfg.specialist_exec_steps, DEFAULT_SPECIALIST_EXEC_STEPS)
+        self.assertEqual(cfg.specialist_dt, DEFAULT_SPECIALIST_DT)
+
+    def test_specialist_flag_forces_enabled(self) -> None:
+        """`AIC_SPECIALIST=1` turns on the specialist AND the controller."""
+        cfg = GuardedDescentConfig.from_env({"AIC_SPECIALIST": "1"})
+        self.assertTrue(cfg.specialist_enabled)
+        self.assertTrue(cfg.enabled)  # forced on so the stall machinery runs
+
+    def test_specialist_off_keeps_guarded_semantics(self) -> None:
+        """`AIC_SPECIALIST` unset keeps today's guarded on/off behavior exactly."""
+        self.assertFalse(GuardedDescentConfig.from_env({"AIC_GUARDED": "1"}).specialist_enabled)
+        self.assertTrue(GuardedDescentConfig.from_env({"AIC_GUARDED": "1"}).enabled)
+        self.assertFalse(GuardedDescentConfig.from_env({"AIC_SPECIALIST": "0"}).enabled)
+        self.assertFalse(GuardedDescentConfig.from_env({"AIC_SPECIALIST": "yes"}).enabled)
+
+    def test_specialist_overrides_parse(self) -> None:
+        """All `AIC_SPECIALIST_*` numeric overrides parse into the config."""
+        cfg = GuardedDescentConfig.from_env(
+            {
+                "AIC_SPECIALIST": "1",
+                "AIC_SPECIALIST_TRAVEL_CAP": "0.09",
+                "AIC_SPECIALIST_MAX_STEPS": "40",
+                "AIC_SPECIALIST_EXEC_STEPS": "2",
+                "AIC_SPECIALIST_DT": "0.3",
+            }
+        )
+        self.assertTrue(cfg.specialist_enabled)
+        self.assertEqual(cfg.specialist_travel_cap, 0.09)
+        self.assertEqual(cfg.specialist_max_steps, 40)
+        self.assertEqual(cfg.specialist_exec_steps, 2)
+        self.assertEqual(cfg.specialist_dt, 0.3)
+
+    def test_specialist_bad_override_raises(self) -> None:
+        """A non-numeric specialist override raises ValueError."""
+        with self.assertRaises(ValueError):
+            GuardedDescentConfig.from_env(
+                {"AIC_SPECIALIST": "1", "AIC_SPECIALIST_MAX_STEPS": "lots"}
+            )
+        with self.assertRaises(ValueError):
+            GuardedDescentConfig.from_env(
+                {"AIC_SPECIALIST": "1", "AIC_SPECIALIST_TRAVEL_CAP": "deep"}
+            )
+
+
+class SpecialistDescentTest(unittest.TestCase):
+    """Action->target integration, travel-cap clamp, and wrench back-off math."""
+
+    ANCHOR = np.array([0.15, -0.05, 0.60])
+    QUAT = np.array([0.0, 0.0, 0.0, 1.0])
+
+    def _descent(self, provider: _ChunkProvider, **overrides: object) -> SpecialistDescent:
+        kwargs: dict[str, object] = dict(
+            provider=provider,
+            anchor_position=self.ANCHOR,
+            anchor_quaternion=self.QUAT,
+            baseline_force=None,
+            travel_cap=0.12,
+            max_steps=0,
+            exec_steps=4,
+            dt_frame=0.275,
+            step_size=0.004,
+            contact_force_threshold=12.0,
+        )
+        kwargs.update(overrides)
+        return SpecialistDescent(**kwargs)  # type: ignore[arg-type]
+
+    def test_integration_matches_pose_integration(self) -> None:
+        """Targets equal expand_twists + integrate_twist_chunk of the exec steps."""
+        # 8-step chunk of a constant -Z 1 cm/frame twist; exec_steps=4, substeps=5.
+        chunk = np.tile(np.array([0.0, 0.0, -0.01, 0.0, 0.0, 0.0]), (8, 1))
+        prov = _ChunkProvider(chunk)
+        d = self._descent(prov, exec_steps=4)
+        targets = d.advance(self.ANCHOR, self.QUAT, force=None, substeps=5)
+        exec_chunk = chunk[:4]
+        fine = pose_integration.expand_twists(exec_chunk, 5)
+        expected = pose_integration.integrate_twist_chunk(
+            self.ANCHOR, self.QUAT, fine, 0.275 / 5
+        )
+        self.assertEqual(targets.shape, (20, 7))  # 4 steps * 5 substeps
+        np.testing.assert_allclose(targets, expected, atol=1e-9)
+        self.assertEqual(d.steps, 4)
+        # Net downward travel = 4 steps * 0.01 m/s * 0.275 s = 0.011 m.
+        self.assertAlmostEqual(d.travel, 4 * 0.01 * 0.275, places=6)
+
+    def test_exec_steps_truncates_chunk(self) -> None:
+        """Only the first exec_steps twists are integrated per cycle."""
+        chunk = np.tile(np.array([0.0, 0.0, -0.01, 0.0, 0.0, 0.0]), (8, 1))
+        d = self._descent(_ChunkProvider(chunk), exec_steps=2)
+        targets = d.advance(self.ANCHOR, self.QUAT, force=None, substeps=3)
+        self.assertEqual(targets.shape, (6, 7))  # 2 steps * 3 substeps
+        self.assertEqual(d.steps, 2)
+
+    def test_receding_horizon_reanchors_to_measured_pose(self) -> None:
+        """Each cycle integrates from the passed (measured) pose, not the anchor."""
+        chunk = np.tile(np.array([0.0, 0.0, -0.01, 0.0, 0.0, 0.0]), (4, 1))
+        d = self._descent(_ChunkProvider(chunk), exec_steps=4)
+        moved = self.ANCHOR + np.array([0.0, 0.0, -0.05])  # arm advanced 5 cm
+        targets = d.advance(moved, self.QUAT, force=None, substeps=1)
+        # First target starts one integration step below the *measured* pose.
+        np.testing.assert_allclose(
+            targets[0, :3], moved + np.array([0.0, 0.0, -0.01 * 0.275]), atol=1e-9
+        )
+
+    def test_travel_cap_clamps_targets(self) -> None:
+        """No commanded target exceeds travel_cap from the anchor; phase -> HOLD."""
+        # A large single-step chunk that would jump ~11 cm in one exec cycle.
+        chunk = np.tile(np.array([0.0, 0.0, -0.4, 0.0, 0.0, 0.0]), (4, 1))
+        d = self._descent(_ChunkProvider(chunk), exec_steps=4, travel_cap=0.05)
+        targets = d.advance(self.ANCHOR, self.QUAT, force=None, substeps=5)
+        dists = np.linalg.norm(targets[:, :3] - self.ANCHOR, axis=1)
+        self.assertLessEqual(float(dists.max()), 0.05 + 1e-9)
+        self.assertEqual(d.phase, GuardedPhase.HOLD)
+        self.assertLessEqual(d.travel, 0.05 + 1e-9)
+
+    def test_travel_cap_hold_recommands_measured_pose(self) -> None:
+        """Once HOLD, further advances just re-command the current measured pose."""
+        chunk = np.tile(np.array([0.0, 0.0, -0.4, 0.0, 0.0, 0.0]), (4, 1))
+        d = self._descent(_ChunkProvider(chunk), exec_steps=4, travel_cap=0.05)
+        d.advance(self.ANCHOR, self.QUAT, force=None, substeps=5)
+        self.assertEqual(d.phase, GuardedPhase.HOLD)
+        held_pose = self.ANCHOR + np.array([0.0, 0.0, -0.03])
+        held = d.advance(held_pose, self.QUAT, force=None, substeps=5)
+        self.assertEqual(held.shape, (1, 7))
+        np.testing.assert_allclose(held[0, :3], held_pose, atol=1e-9)
+
+    def test_wrench_backoff_fires_and_holds(self) -> None:
+        """A baseline-relative force spike retreats one step and holds."""
+        chunk = np.tile(np.array([0.0, 0.0, -0.01, 0.0, 0.0, 0.0]), (4, 1))
+        d = self._descent(
+            _ChunkProvider(chunk),
+            exec_steps=4,
+            baseline_force=np.array([19.0, 0.0, 0.0]),
+            contact_force_threshold=12.0,
+        )
+        # First cycle (no spike) establishes the downward motion direction.
+        d.advance(self.ANCHOR, self.QUAT, force=np.array([19.0, 0.0, 0.0]), substeps=1)
+        self.assertEqual(d.phase, GuardedPhase.DESCEND)
+        # Spike: |F - baseline| = 21 N > 12 N -> back off and HOLD.
+        pos_now = self.ANCHOR + np.array([0.0, 0.0, -0.011])
+        backoff = d.advance(pos_now, self.QUAT, force=np.array([40.0, 0.0, 0.0]), substeps=1)
+        self.assertEqual(d.phase, GuardedPhase.HOLD)
+        self.assertEqual(d.contacts, 1)
+        self.assertAlmostEqual(d.last_force_delta, 21.0, places=6)
+        self.assertEqual(backoff.shape, (1, 7))
+        # Retreat is one step_size *up* (opposite the -Z descent) from the measured pose.
+        self.assertGreater(backoff[0, 2], pos_now[2])
+
+    def test_no_baseline_disables_wrench_guard(self) -> None:
+        """Without a baseline even a huge force does not back off."""
+        chunk = np.tile(np.array([0.0, 0.0, -0.01, 0.0, 0.0, 0.0]), (4, 1))
+        d = self._descent(_ChunkProvider(chunk), baseline_force=None)
+        d.advance(self.ANCHOR, self.QUAT, force=np.array([500.0, 0.0, 0.0]), substeps=1)
+        self.assertEqual(d.phase, GuardedPhase.DESCEND)
+
+    def test_max_steps_holds(self) -> None:
+        """The max_steps safety bound freezes the descent once reached."""
+        chunk = np.tile(np.array([0.0, 0.0, -0.001, 0.0, 0.0, 0.0]), (4, 1))
+        d = self._descent(_ChunkProvider(chunk), exec_steps=2, max_steps=2, travel_cap=1.0)
+        d.advance(self.ANCHOR, self.QUAT, force=None, substeps=1)  # steps -> 2
+        self.assertEqual(d.steps, 2)
+        self.assertEqual(d.phase, GuardedPhase.DESCEND)
+        out = d.advance(self.ANCHOR, self.QUAT, force=None, substeps=1)  # steps >= max
+        self.assertEqual(d.phase, GuardedPhase.HOLD)
+        self.assertEqual(out.shape, (1, 7))
+
+    def test_none_chunk_holds_without_advancing(self) -> None:
+        """A provider with no observation yet yields a hold (no step taken)."""
+        d = self._descent(_ChunkProvider(None))
+        out = d.advance(self.ANCHOR, self.QUAT, force=None, substeps=3)
+        self.assertEqual(out.shape, (1, 7))
+        self.assertEqual(d.steps, 0)
+        self.assertEqual(d.phase, GuardedPhase.DESCEND)  # still descending, just idle
+        np.testing.assert_allclose(out[0, :3], self.ANCHOR, atol=1e-9)
+
+    def test_logs_specialist_lines(self) -> None:
+        """Advancing appends `[specialist]` telemetry lines when a log list is given."""
+        chunk = np.tile(np.array([0.0, 0.0, -0.01, 0.0, 0.0, 0.0]), (4, 1))
+        d = self._descent(_ChunkProvider(chunk))
+        logs: list[str] = []
+        d.advance(self.ANCHOR, self.QUAT, force=None, substeps=1, logs=logs, t=20.0)
+        self.assertTrue(any(ln.startswith("[specialist]") for ln in logs))
+
+    def test_bad_arguments_raise(self) -> None:
+        """Malformed constructor / chunk shapes raise ValueError."""
+        prov = _ChunkProvider(np.zeros((4, 6)))
+        with self.assertRaises(ValueError):
+            self._descent(prov, travel_cap=0.0)
+        with self.assertRaises(ValueError):
+            self._descent(prov, exec_steps=0)
+        with self.assertRaises(ValueError):
+            self._descent(prov, dt_frame=0.0)
+        with self.assertRaises(ValueError):
+            self._descent(prov, max_steps=-1)
+        # A malformed chunk (wrong width) raises on advance.
+        d = self._descent(_ChunkProvider(np.zeros((4, 3))))
+        with self.assertRaises(ValueError):
+            d.advance(self.ANCHOR, self.QUAT, force=None, substeps=1)
+
+
+class SpecialistSwitchTest(unittest.TestCase):
+    """Controller switching: specialist-off is the exact scripted path."""
+
+    def _config(self, **overrides: object) -> GuardedDescentConfig:
+        base: dict[str, object] = dict(
+            enabled=True,
+            speed_threshold=0.01,
+            stall_window_s=3.0,
+            min_runtime_s=15.0,
+            step_size=0.004,
+            travel_cap=0.12,
+            contact_force_threshold=12.0,
+        )
+        base.update(overrides)
+        return GuardedDescentConfig(**base)  # type: ignore[arg-type]
+
+    def _run(self, ctrl: GuardedDescentController, substeps: int = 5) -> list:
+        steps = []
+        pos = np.array([0.15, -0.05, 0.60])
+        force = np.array([19.0, 0.0, 0.0])
+        quat = np.array([0.0, 0.0, 0.0, 1.0])
+        for i in range(120):
+            t = i * 0.275
+            if t < 19.0:
+                pos = pos + np.array([0.0, 0.0, -0.01])
+            steps.append(ctrl.cycle(t, pos, quat, force, substeps=substeps))
+        return steps
+
+    def test_specialist_off_uses_scripted_descent(self) -> None:
+        """With specialist_enabled False the descent is the scripted GuardedDescent."""
+        chunk = np.tile(np.array([0.0, 0.0, -0.02, 0.0, 0.0, 0.0]), (8, 1))
+        prov = _ChunkProvider(chunk)
+        ctrl = GuardedDescentController(
+            self._config(specialist_enabled=False), specialist_provider=prov
+        )
+        self._run(ctrl)
+        self.assertTrue(ctrl.active)
+        self.assertIsInstance(ctrl.descent, GuardedDescent)
+        self.assertEqual(prov.calls, 0)  # specialist never queried
+        self.assertEqual(ctrl._bearing_source, "motion-axis")
+
+    def test_specialist_off_matches_no_provider_byte_for_byte(self) -> None:
+        """Passing a specialist provider but leaving it off yields identical targets."""
+        chunk = np.tile(np.array([0.0, 0.0, -0.02, 0.0, 0.0, 0.0]), (8, 1))
+        ctrl_off = GuardedDescentController(
+            self._config(specialist_enabled=False),
+            specialist_provider=_ChunkProvider(chunk),
+        )
+        ctrl_bare = GuardedDescentController(self._config(specialist_enabled=False))
+        steps_off = self._run(ctrl_off)
+        steps_bare = self._run(ctrl_bare)
+        for a, b in zip(steps_off, steps_bare):
+            if a.targets is None:
+                self.assertIsNone(b.targets)
+            else:
+                np.testing.assert_allclose(a.targets, b.targets)
+
+    def test_specialist_on_engages_specialist_descent(self) -> None:
+        """With specialist_enabled True the stall hands off to SpecialistDescent."""
+        chunk = np.tile(np.array([0.0, 0.0, -0.02, 0.0, 0.0, 0.0]), (8, 1))
+        prov = _ChunkProvider(chunk)
+        ctrl = GuardedDescentController(
+            self._config(specialist_enabled=True), specialist_provider=prov
+        )
+        steps = self._run(ctrl)
+        self.assertTrue(ctrl.active)
+        self.assertIsInstance(ctrl.descent, SpecialistDescent)
+        self.assertEqual(ctrl._bearing_source, "specialist")
+        self.assertGreater(prov.calls, 0)
+        # Exactly one handoff cycle, logged with a [specialist] HANDOFF line.
+        self.assertEqual(sum(1 for s in steps if s.triggered_this_cycle), 1)
+        idx = next(i for i, s in enumerate(steps) if s.triggered_this_cycle)
+        self.assertTrue(
+            any("[specialist] HANDOFF" in ln for ln in steps[idx].log_lines)
+        )
+        # After handoff, targets are commanded and are sub-stepped pose targets.
+        post = steps[idx]
+        assert post.targets is not None
+        self.assertEqual(post.targets.shape[1], 7)
+        # Pre-handoff cycles keep the learned path (targets None).
+        self.assertTrue(all(s.targets is None for s in steps[:idx]))
+
+    def test_specialist_on_without_provider_falls_back_to_scripted(self) -> None:
+        """specialist_enabled but no provider wired stays on the scripted descent."""
+        ctrl = GuardedDescentController(
+            self._config(specialist_enabled=True), specialist_provider=None
+        )
+        self._run(ctrl)
+        self.assertTrue(ctrl.active)
+        self.assertIsInstance(ctrl.descent, GuardedDescent)
+        self.assertEqual(ctrl._bearing_source, "motion-axis")
 
 
 if __name__ == "__main__":

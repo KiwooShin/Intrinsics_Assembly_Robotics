@@ -47,6 +47,8 @@ from typing import Iterable, Mapping, Protocol
 
 import numpy as np
 
+from aic_example_policies.ros import pose_integration
+
 # ---------------------------------------------------------------------------
 # Defaults (all overridable through ``GuardedDescentConfig`` / ``AIC_GUARDED_*``).
 # ---------------------------------------------------------------------------
@@ -77,6 +79,17 @@ DEFAULT_REAIM_RATE: float = 0.2  # per-cycle axis blend toward a re-queried targ
 # distance, decoupled from the unreliable predicted |offset| magnitude (forensics
 # 2026-07-19: depth val error ~4.6 cm, lateral/axis ~0.86 cm).
 DEFAULT_AUX_FIXED_TRAVEL: float = 0.10
+
+# --- Learned insertion-specialist (``AIC_SPECIALIST``) handoff defaults (INSERTION
+# _PLAN.md code change #2). Once the approach stalls, a separate specialist
+# checkpoint's predicted TCP-velocity chunks replace the scripted GuardedDescent,
+# integrated into pose targets under the SAME travel-cap and wrench back-off
+# guards. All overridable via ``AIC_SPECIALIST_*``. ---
+DEFAULT_SPECIALIST_TRAVEL_CAP: float = 0.12  # m total travel from the anchor cap.
+DEFAULT_SPECIALIST_MAX_STEPS: int = 0  # cap on integrated chunk steps (0 = unlimited).
+DEFAULT_SPECIALIST_EXEC_STEPS: int = 4  # chunk steps integrated per descent cycle.
+DEFAULT_SPECIALIST_DT: float = 0.275  # s training frame period for velocity integration.
+
 # Per-trial guarded telemetry mirror written in the process CWD (the trial dir).
 DEFAULT_TRACE_FILENAME: str = "guarded_trace.log"
 
@@ -111,6 +124,33 @@ class PortBearingProvider(Protocol):
             predicts one (6-D checkpoint) else None. A legacy 3-tuple return
             ``(target_base, magnitude, ok)`` is also accepted (treated as
             ``axis_base = None``).
+        """
+        ...
+
+
+class SpecialistActionProvider(Protocol):
+    """Structural type for a learned insertion specialist's action source.
+
+    Implemented by ``DeployACT`` (which runs a *separate* specialist checkpoint on
+    the live RGB+TCP+wrench observation); kept behind this protocol so
+    ``guarded_descent`` stays ROS/torch-free and unit-testable. Called once per
+    descent cycle to fetch the next TCP-velocity chunk to integrate.
+    """
+
+    def predict_chunk(
+        self, position: np.ndarray, quaternion: np.ndarray
+    ) -> np.ndarray | None:
+        """Return the next base_link TCP-velocity chunk for the live observation.
+
+        Args:
+            position: Current TCP position ``(3,)`` in base_link (m). The chunk is
+                resolved from the held observation, not this pose, but it is passed
+                for protocol symmetry with :class:`PortBearingProvider`.
+            quaternion: Current TCP orientation ``(4,)`` ``[x, y, z, w]``.
+
+        Returns:
+            A ``(K, 6)`` array of base_link-frame twists (m/s, rad/s), or None when
+            no observation is available yet (the descent then holds this cycle).
         """
         ...
 
@@ -472,6 +512,316 @@ class GuardedDescent:
         return self.target()
 
 
+class SpecialistDescent:
+    """Learned-specialist descent: integrates a predicted velocity chunk to targets.
+
+    The drop-in learned counterpart to :class:`GuardedDescent` for the specialist
+    handoff (INSERTION_PLAN.md change #2). Instead of stepping a fixed distance
+    along an estimated axis, each :meth:`advance` queries a
+    :class:`SpecialistActionProvider` for the next base_link TCP-velocity chunk
+    (from the live RGB+TCP+wrench observation, exactly the deploy-legal signals the
+    main policy uses -- no port TF), integrates the first ``exec_steps`` twists
+    (sub-stepped) into absolute pose targets anchored to the *measured* pose
+    (receding horizon), and applies the SAME two safety guards as the scripted
+    descent:
+
+    * **Wrench back-off** -- if ``|F - baseline|`` exceeds
+      ``contact_force_threshold`` the chunk is discarded, a single one-step retreat
+      target is commanded, and the descent transitions to :attr:`GuardedPhase.HOLD`.
+    * **Travel cap / max steps** -- targets are clamped to lie within
+      ``travel_cap`` of the fixed anchor, and once the cap (or ``max_steps``) is
+      hit the descent holds.
+
+    Duck-types the attributes ``GuardedDescentController`` reads off the scripted
+    descent (:attr:`steps`, :attr:`travel`, :attr:`contacts`,
+    :attr:`last_force_delta`, :attr:`phase`), so the controller's result assembly
+    is shared unchanged.
+    """
+
+    def __init__(
+        self,
+        provider: SpecialistActionProvider,
+        anchor_position: np.ndarray,
+        anchor_quaternion: np.ndarray,
+        baseline_force: np.ndarray | None,
+        travel_cap: float = DEFAULT_SPECIALIST_TRAVEL_CAP,
+        max_steps: int = DEFAULT_SPECIALIST_MAX_STEPS,
+        exec_steps: int = DEFAULT_SPECIALIST_EXEC_STEPS,
+        dt_frame: float = DEFAULT_SPECIALIST_DT,
+        step_size: float = DEFAULT_STEP_SIZE,
+        contact_force_threshold: float = DEFAULT_CONTACT_FORCE_THRESHOLD,
+    ) -> None:
+        """Initialize the specialist descent from the handoff pose.
+
+        Args:
+            provider: Learned action source queried once per descent cycle.
+            anchor_position: TCP position ``(3,)`` at handoff (m); the fixed origin
+                the travel cap is measured from.
+            anchor_quaternion: TCP orientation ``(4,)`` ``[x, y, z, w]`` at handoff
+                (kept for telemetry/back-off; the specialist predicts its own
+                orientation deltas).
+            baseline_force: Approach-phase mean force ``(3,)`` (N) for the contact
+                guard, or None to disable it.
+            travel_cap: Maximum total travel (m) from the anchor before holding.
+                Must be positive.
+            max_steps: Cap on integrated chunk steps (0 = unlimited). Must be >= 0.
+            exec_steps: Chunk steps integrated per cycle. Must be >= 1.
+            dt_frame: Training frame period (s) for velocity integration. Must be
+                positive.
+            step_size: Retreat distance (m) commanded on a contact back-off. Must
+                be positive.
+            contact_force_threshold: Baseline-relative ``|F - baseline|`` (N) that
+                triggers the back-off. Must be non-negative.
+
+        Raises:
+            ValueError: If any argument is out of range or malformed.
+        """
+        pos = np.asarray(anchor_position, dtype=np.float64).reshape(-1)
+        if pos.shape != (3,):
+            raise ValueError(f"anchor_position must have shape (3,), got {pos.shape}")
+        quat = np.asarray(anchor_quaternion, dtype=np.float64).reshape(-1)
+        if quat.shape != (4,):
+            raise ValueError(f"anchor_quaternion must have shape (4,), got {quat.shape}")
+        if float(np.linalg.norm(quat)) < _QUAT_MIN_NORM:
+            raise ValueError("anchor_quaternion has near-zero norm")
+        if not math.isfinite(travel_cap) or travel_cap <= 0.0:
+            raise ValueError(f"travel_cap must be a positive float, got {travel_cap!r}")
+        if max_steps < 0:
+            raise ValueError(f"max_steps must be >= 0, got {max_steps}")
+        if exec_steps < 1:
+            raise ValueError(f"exec_steps must be >= 1, got {exec_steps}")
+        if not math.isfinite(dt_frame) or dt_frame <= 0.0:
+            raise ValueError(f"dt_frame must be a positive float, got {dt_frame!r}")
+        if not math.isfinite(step_size) or step_size <= 0.0:
+            raise ValueError(f"step_size must be a positive float, got {step_size!r}")
+        if not math.isfinite(contact_force_threshold) or contact_force_threshold < 0.0:
+            raise ValueError(
+                f"contact_force_threshold must be a non-negative float, "
+                f"got {contact_force_threshold!r}"
+            )
+
+        self.provider = provider
+        self.anchor_position = pos
+        self.anchor_quaternion = quat
+        self.baseline_force = (
+            np.asarray(baseline_force, dtype=np.float64).reshape(-1)
+            if baseline_force is not None
+            else None
+        )
+        if self.baseline_force is not None and self.baseline_force.shape != (3,):
+            raise ValueError(
+                f"baseline_force must have shape (3,), got {self.baseline_force.shape}"
+            )
+        self.travel_cap = float(travel_cap)
+        self.max_steps = int(max_steps)
+        self.exec_steps = int(exec_steps)
+        self.dt_frame = float(dt_frame)
+        self.step_size = float(step_size)
+        self.contact_force_threshold = float(contact_force_threshold)
+
+        self.steps = 0
+        self.phase = GuardedPhase.DESCEND
+        self.contacts = 0
+        self.last_force_delta = 0.0
+        self._travel = 0.0
+        self._last_position = pos.copy()
+        self._last_dir: np.ndarray | None = None
+
+    @property
+    def travel(self) -> float:
+        """Total commanded travel from the anchor to the last target, in metres."""
+        return self._travel
+
+    def _force_delta(self, force: np.ndarray | None) -> float:
+        """Return ``|F - baseline|`` (N), or 0.0 when the contact guard is inactive.
+
+        Args:
+            force: Current wrist force ``(3,)`` (N), or None.
+
+        Returns:
+            The baseline-relative force magnitude, or 0.0 when either the force or
+            the baseline is unavailable.
+        """
+        if force is None or self.baseline_force is None:
+            return 0.0
+        f = np.asarray(force, dtype=np.float64).reshape(-1)
+        if f.shape != (3,):
+            raise ValueError(f"force must have shape (3,), got {f.shape}")
+        return float(np.linalg.norm(f - self.baseline_force))
+
+    def _hold_target(self, position: np.ndarray, quaternion: np.ndarray) -> np.ndarray:
+        """Return a single ``(1, 7)`` target that freezes at the measured pose.
+
+        Args:
+            position: Current TCP position ``(3,)`` (m).
+            quaternion: Current TCP orientation ``(4,)`` ``[x, y, z, w]``.
+
+        Returns:
+            A ``(1, 7)`` pose-target array re-commanding the current pose.
+        """
+        out = np.empty((1, 7), dtype=np.float64)
+        out[0, :3] = position
+        out[0, 3:] = quaternion
+        return out
+
+    def _backoff_target(
+        self, position: np.ndarray, quaternion: np.ndarray
+    ) -> np.ndarray:
+        """Return a ``(1, 7)`` target retreating one ``step_size`` from the pose.
+
+        Retreats along the negation of the last commanded motion direction (or
+        simply holds if no motion has been commanded yet), mirroring the scripted
+        descent's one-step contact back-off.
+
+        Args:
+            position: Current TCP position ``(3,)`` (m).
+            quaternion: Current TCP orientation ``(4,)`` ``[x, y, z, w]``.
+
+        Returns:
+            A ``(1, 7)`` retreat pose-target array.
+        """
+        out = np.empty((1, 7), dtype=np.float64)
+        if self._last_dir is not None:
+            out[0, :3] = position - self._last_dir * self.step_size
+        else:
+            out[0, :3] = position
+        out[0, 3:] = quaternion
+        return out
+
+    def _clamp_to_cap(self, targets: np.ndarray) -> tuple[np.ndarray, bool]:
+        """Clamp each target to lie within ``travel_cap`` of the fixed anchor.
+
+        Args:
+            targets: The ``(n, 7)`` integrated pose targets.
+
+        Returns:
+            A ``(clamped_targets, capped)`` pair; ``capped`` is True when any target
+            exceeded the cap and was projected back onto the cap sphere.
+        """
+        out = np.asarray(targets, dtype=np.float64).copy()
+        capped = False
+        for i in range(len(out)):
+            d = out[i, :3] - self.anchor_position
+            dist = float(np.linalg.norm(d))
+            if dist > self.travel_cap:
+                capped = True
+                if dist > _AXIS_MIN_NORM:
+                    out[i, :3] = self.anchor_position + d * (self.travel_cap / dist)
+        return out, capped
+
+    def advance(
+        self,
+        position: np.ndarray,
+        quaternion: np.ndarray,
+        force: np.ndarray | None,
+        substeps: int = 1,
+        logs: list[str] | None = None,
+        t: float = 0.0,
+    ) -> np.ndarray:
+        """Advance one specialist-descent cycle and return the pose targets.
+
+        Order of guards each cycle: while already holding, re-command the measured
+        pose; otherwise test the wrench back-off (retreat + hold on a spike), then
+        the max-steps cap, then query the specialist and integrate its chunk into
+        pose targets, clamping to the travel cap (hold once reached).
+
+        Args:
+            position: Current (measured) TCP position ``(3,)`` (m).
+            quaternion: Current (measured) TCP orientation ``(4,)`` ``[x, y, z, w]``.
+            force: Current wrist force ``(3,)`` (N) for the contact guard, or None.
+            substeps: Sub-poses emitted per chunk step (matches DeployACT SUBSTEPS).
+                Must be >= 1.
+            logs: Optional mutable log list; ``[specialist]`` lines are appended.
+            t: Elapsed time (s), for log lines only.
+
+        Returns:
+            An ``(m, 7)`` array of absolute pose targets to command this cycle.
+
+        Raises:
+            ValueError: If ``substeps`` < 1 or the provider returns a malformed chunk.
+        """
+        if substeps < 1:
+            raise ValueError(f"substeps must be >= 1, got {substeps}")
+        pos = np.asarray(position, dtype=np.float64).reshape(-1)
+        if pos.shape != (3,):
+            raise ValueError(f"position must have shape (3,), got {pos.shape}")
+        quat = np.asarray(quaternion, dtype=np.float64).reshape(-1)
+        if quat.shape != (4,):
+            raise ValueError(f"quaternion must have shape (4,), got {quat.shape}")
+        force_vec = None if force is None else np.asarray(force, dtype=np.float64).reshape(-1)
+
+        self.last_force_delta = self._force_delta(force_vec)
+
+        if self.phase == GuardedPhase.HOLD:
+            return self._hold_target(pos, quat)
+
+        # Wrench back-off guard (force safety preserved from the scripted descent).
+        if (
+            self.baseline_force is not None
+            and self.last_force_delta > self.contact_force_threshold
+        ):
+            self.contacts += 1
+            self.phase = GuardedPhase.HOLD
+            if logs is not None:
+                logs.append(
+                    f"[specialist] phase -> HOLD at t={t:.1f}s: contact "
+                    f"(|F-baseline|={self.last_force_delta:.2f}N > "
+                    f"{self.contact_force_threshold:.1f}N), backing off one step; "
+                    f"steps={self.steps} travel={self._travel * 1e3:.1f}mm"
+                )
+            return self._backoff_target(pos, quat)
+
+        # Max-steps safety bound.
+        if self.max_steps > 0 and self.steps >= self.max_steps:
+            self.phase = GuardedPhase.HOLD
+            if logs is not None:
+                logs.append(
+                    f"[specialist] phase -> HOLD at t={t:.1f}s: max_steps "
+                    f"{self.max_steps} reached; travel={self._travel * 1e3:.1f}mm"
+                )
+            return self._hold_target(pos, quat)
+
+        chunk = self.provider.predict_chunk(pos, quat)
+        if chunk is None:
+            # No observation yet: hold at the current measured pose this cycle.
+            return self._hold_target(pos, quat)
+        chunk_arr = np.asarray(chunk, dtype=np.float64)
+        if chunk_arr.ndim != 2 or chunk_arr.shape[1] != 6:
+            raise ValueError(
+                f"specialist chunk must have shape (n, 6), got {chunk_arr.shape}"
+            )
+
+        exec_chunk = chunk_arr[: self.exec_steps]
+        fine = pose_integration.expand_twists(exec_chunk, substeps)
+        dt_fine = self.dt_frame / substeps
+        targets = pose_integration.integrate_twist_chunk(pos, quat, fine, dt_fine)
+        targets, capped = self._clamp_to_cap(targets)
+
+        self.steps += len(exec_chunk)
+        self._last_position = targets[-1, :3].copy()
+        self._travel = float(np.linalg.norm(self._last_position - self.anchor_position))
+        step_vec = targets[-1, :3] - pos
+        step_norm = float(np.linalg.norm(step_vec))
+        if step_norm >= _AXIS_MIN_NORM:
+            self._last_dir = step_vec / step_norm
+
+        if capped:
+            self.phase = GuardedPhase.HOLD
+            if logs is not None:
+                logs.append(
+                    f"[specialist] phase -> HOLD at t={t:.1f}s: travel cap "
+                    f"{self.travel_cap * 1e3:.0f}mm reached; steps={self.steps}"
+                )
+        if logs is not None:
+            lin = float(np.linalg.norm(exec_chunk[0, :3])) if len(exec_chunk) else 0.0
+            logs.append(
+                f"[specialist] t={t:.1f}s step={self.steps} "
+                f"travel={self._travel * 1e3:.1f}mm |v0|={lin:.4f}m/s "
+                f"|F-baseline|={self.last_force_delta:.2f}N contacts={self.contacts}"
+            )
+        return targets
+
+
 @dataclasses.dataclass(frozen=True)
 class GuardedDescentConfig:
     """Immutable configuration for the guarded-descent probe.
@@ -512,6 +862,19 @@ class GuardedDescentConfig:
             axis toward the fresh target (default off; enable only after the
             static handoff validates).
         reaim_rate: Per-cycle blend fraction toward the re-queried axis.
+        specialist_enabled: Whether the LEARNED insertion specialist replaces the
+            scripted descent once the stall latches (``AIC_SPECIALIST=1``). When
+            False the descent is byte-identical to today's scripted GuardedDescent.
+            ``enabled`` is forced True whenever this is set, since the specialist
+            still needs the stall-detection machinery to hand off.
+        specialist_travel_cap: Maximum total travel (m) from the stall anchor the
+            specialist may command before holding (a hard safety limit).
+        specialist_max_steps: Cap on the number of integrated chunk steps before
+            holding (0 = unlimited); an additional safety bound.
+        specialist_exec_steps: Chunk steps integrated into pose targets per descent
+            cycle (receding horizon) before re-querying the specialist.
+        specialist_dt: Training frame period (s) used to integrate the specialist's
+            TCP-velocity chunk into pose targets (matches ``DeployACT.DT_FRAME``).
     """
 
     enabled: bool = False
@@ -535,6 +898,11 @@ class GuardedDescentConfig:
     aux_min_samples: int = DEFAULT_AUX_MIN_SAMPLES
     reaim: bool = False
     reaim_rate: float = DEFAULT_REAIM_RATE
+    specialist_enabled: bool = False
+    specialist_travel_cap: float = DEFAULT_SPECIALIST_TRAVEL_CAP
+    specialist_max_steps: int = DEFAULT_SPECIALIST_MAX_STEPS
+    specialist_exec_steps: int = DEFAULT_SPECIALIST_EXEC_STEPS
+    specialist_dt: float = DEFAULT_SPECIALIST_DT
 
     def stiffness(self) -> list[float] | None:
         """Return the descent stiffness list, or None to keep the caller default.
@@ -564,21 +932,29 @@ class GuardedDescentConfig:
         ``AIC_GUARDED_AUX_MAXMAG``, ``AIC_GUARDED_AUX_STD``,
         ``AIC_GUARDED_AUX_MARGIN``, ``AIC_GUARDED_AUX_TRAVEL`` (fixed deep-travel
         cap for the 6-D explicit-axis descent), ``AIC_GUARDED_REAIM``
-        (``"1"`` re-aims).
+        (``"1"`` re-aims). Learned insertion specialist (INSERTION_PLAN.md change
+        #2): ``AIC_SPECIALIST`` (``"1"`` replaces the scripted descent with the
+        learned specialist AND forces ``enabled`` so the stall machinery runs),
+        ``AIC_SPECIALIST_TRAVEL_CAP``, ``AIC_SPECIALIST_MAX_STEPS``,
+        ``AIC_SPECIALIST_EXEC_STEPS``, ``AIC_SPECIALIST_DT`` (the specialist
+        checkpoint path itself is read by ``DeployACT`` via ``AIC_SPECIALIST_CKPT``).
 
         Args:
             env: Environment mapping (e.g. ``os.environ``).
 
         Returns:
-            The parsed :class:`GuardedDescentConfig`. When ``AIC_GUARDED`` is not
-            exactly ``"1"`` the returned config has ``enabled=False`` and default
-            thresholds.
+            The parsed :class:`GuardedDescentConfig`. When neither ``AIC_GUARDED``
+            nor ``AIC_SPECIALIST`` is exactly ``"1"`` the returned config has
+            ``enabled=False`` and default thresholds.
 
         Raises:
             ValueError: If a provided override cannot be parsed as its numeric
                 type.
         """
-        enabled = env.get("AIC_GUARDED", "0").strip() == "1"
+        specialist_enabled = env.get("AIC_SPECIALIST", "0").strip() == "1"
+        # The specialist reuses the stall-detection/handoff machinery, so enabling
+        # it also enables the guarded controller even if AIC_GUARDED is unset.
+        enabled = env.get("AIC_GUARDED", "0").strip() == "1" or specialist_enabled
 
         def _f(key: str, default: float) -> float:
             raw = env.get(key)
@@ -620,6 +996,15 @@ class GuardedDescentConfig:
             aux_travel_margin=_f("AIC_GUARDED_AUX_MARGIN", DEFAULT_AUX_TRAVEL_MARGIN),
             aux_fixed_travel=_f("AIC_GUARDED_AUX_TRAVEL", DEFAULT_AUX_FIXED_TRAVEL),
             reaim=env.get("AIC_GUARDED_REAIM", "0").strip() == "1",
+            specialist_enabled=specialist_enabled,
+            specialist_travel_cap=_f(
+                "AIC_SPECIALIST_TRAVEL_CAP", DEFAULT_SPECIALIST_TRAVEL_CAP
+            ),
+            specialist_max_steps=_i("AIC_SPECIALIST_MAX_STEPS", DEFAULT_SPECIALIST_MAX_STEPS),
+            specialist_exec_steps=_i(
+                "AIC_SPECIALIST_EXEC_STEPS", DEFAULT_SPECIALIST_EXEC_STEPS
+            ),
+            specialist_dt=_f("AIC_SPECIALIST_DT", DEFAULT_SPECIALIST_DT),
         )
 
 
@@ -672,6 +1057,7 @@ class GuardedDescentController:
         self,
         config: GuardedDescentConfig,
         bearing_provider: PortBearingProvider | None = None,
+        specialist_provider: SpecialistActionProvider | None = None,
     ) -> None:
         """Initialize the controller from a config.
 
@@ -683,9 +1069,15 @@ class GuardedDescentController:
             bearing_provider: Optional learned port-bearing source (the aux head).
                 When None -- or when ``config.use_aux_bearing`` is False -- the
                 controller is byte-identical to the motion-axis-only behavior.
+            specialist_provider: Optional learned insertion-specialist action
+                source. When None -- or when ``config.specialist_enabled`` is
+                False -- the descent is the scripted :class:`GuardedDescent`,
+                byte-identical to today. When both are set, the stall handoff
+                engages a :class:`SpecialistDescent` instead.
         """
         self.config = config
         self.bearing_provider = bearing_provider
+        self.specialist_provider = specialist_provider
         self.stall = StallDetector(
             speed_threshold=config.speed_threshold,
             stall_window_s=config.stall_window_s,
@@ -695,7 +1087,7 @@ class GuardedDescentController:
             window=config.axis_window,
             min_displacement=config.axis_min_displacement,
         )
-        self.descent: GuardedDescent | None = None
+        self.descent: GuardedDescent | SpecialistDescent | None = None
         self.phase = GuardedPhase.APPROACH
         self._last_position: np.ndarray | None = None
         self._last_time: float | None = None
@@ -721,6 +1113,11 @@ class GuardedDescentController:
     def _aux_active(self) -> bool:
         """Whether the learned port bearing should be consulted at handoff."""
         return self.bearing_provider is not None and self.config.use_aux_bearing
+
+    @property
+    def _specialist_active(self) -> bool:
+        """Whether the learned insertion specialist drives the descent at handoff."""
+        return self.specialist_provider is not None and self.config.specialist_enabled
 
     @property
     def active(self) -> bool:
@@ -819,6 +1216,13 @@ class GuardedDescentController:
 
         # Descending or holding: advance the state machine and emit targets.
         assert self.descent is not None
+        if isinstance(self.descent, SpecialistDescent):
+            # Learned specialist: it emits the (already sub-stepped) integrated
+            # pose targets directly and manages its own HOLD transitions/logs.
+            targets = self.descent.advance(pos, quat, force_vec, substeps, logs, t)
+            if self.descent.phase == GuardedPhase.HOLD:
+                self.phase = GuardedPhase.HOLD
+            return self._result(targets, tuple(logs), triggered_this_cycle)
         prev_target = self.descent.target()
         prev_phase = self.descent.phase
         new_target = self.descent.advance(force_vec)
@@ -953,6 +1357,9 @@ class GuardedDescentController:
             True when a guarded descent was engaged; False to keep the learned
             path (no usable bearing).
         """
+        if self._specialist_active:
+            # Learned insertion specialist replaces the scripted descent entirely.
+            return self._engage_specialist(t, pos, quat, baseline, logs)
         aux_target: np.ndarray | None = None
         aux_axis: np.ndarray | None = None
         aux_reason = ""
@@ -1022,6 +1429,63 @@ class GuardedDescentController:
             f"baseline|F|={baseline_norm:.2f}N step={self.config.step_size*1e3:.1f}mm "
             f"cap={travel_cap*1e3:.0f}mm force_thr="
             f"{self.config.contact_force_threshold:.1f}N"
+        )
+        return True
+
+    def _engage_specialist(
+        self,
+        t: float,
+        pos: np.ndarray,
+        quat: np.ndarray,
+        baseline: np.ndarray | None,
+        logs: list[str],
+    ) -> bool:
+        """Build the :class:`SpecialistDescent` at the stall handoff.
+
+        Anchors the learned specialist at the current (stall) pose and wires the
+        approach-phase wrench baseline into its contact guard. Unlike the scripted
+        descent this never falls back for lack of a bearing -- the specialist reads
+        the live observation each cycle -- so it always engages once the stall
+        latches.
+
+        Args:
+            t: Elapsed time (s).
+            pos: Anchor TCP position ``(3,)`` (m).
+            quat: Anchor TCP orientation ``(4,)`` ``[x, y, z, w]``.
+            baseline: Approach-phase mean force ``(3,)`` (N), or None.
+            logs: Mutable log-line list appended to in place.
+
+        Returns:
+            Always True (the specialist descent is engaged).
+        """
+        assert self.specialist_provider is not None
+        self.descent = SpecialistDescent(
+            provider=self.specialist_provider,
+            anchor_position=pos,
+            anchor_quaternion=quat,
+            baseline_force=baseline,
+            travel_cap=self.config.specialist_travel_cap,
+            max_steps=self.config.specialist_max_steps,
+            exec_steps=self.config.specialist_exec_steps,
+            dt_frame=self.config.specialist_dt,
+            step_size=self.config.step_size,
+            contact_force_threshold=self.config.contact_force_threshold,
+        )
+        self.phase = GuardedPhase.DESCEND
+        self._bearing_source = "specialist"
+        baseline_norm = 0.0 if baseline is None else float(np.linalg.norm(baseline))
+        max_steps_desc = (
+            "unlimited" if self.config.specialist_max_steps == 0
+            else str(self.config.specialist_max_steps)
+        )
+        logs.append(
+            f"[specialist] HANDOFF at t={t:.1f}s: stall detected, engaging learned "
+            f"insertion specialist. "
+            f"anchor=({pos[0]:+.3f},{pos[1]:+.3f},{pos[2]:+.3f}) "
+            f"baseline|F|={baseline_norm:.2f}N exec_steps={self.config.specialist_exec_steps} "
+            f"dt={self.config.specialist_dt:g}s travel_cap="
+            f"{self.config.specialist_travel_cap*1e3:.0f}mm max_steps={max_steps_desc} "
+            f"force_thr={self.config.contact_force_threshold:.1f}N"
         )
         return True
 

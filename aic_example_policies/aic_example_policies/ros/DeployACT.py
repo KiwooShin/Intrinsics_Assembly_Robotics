@@ -153,6 +153,51 @@ class _AuxBearingProvider:
         )
 
 
+class SpecialistInsertProvider:
+    """Adapts ``DeployACT`` specialist inference to ``SpecialistActionProvider``.
+
+    Mirrors :class:`_AuxBearingProvider`: holds the latest observation (set by the
+    deploy loop each cycle) and, when queried by ``SpecialistDescent`` during the
+    descent phase, runs the *separate* specialist checkpoint on it and returns the
+    next base_link TCP-velocity chunk. The specialist consumes the SAME
+    deploy-legal observation as the main policy (3xRGB + 13-D pose+wrench state);
+    it never touches the port TF. Kept tiny so ``guarded_descent`` stays
+    torch/ROS-free. A ``predictor`` override lets tests inject a fake chunk source
+    (no checkpoint/GPU needed).
+    """
+
+    def __init__(self, deploy: "DeployACT", predictor=None) -> None:
+        """Initialize the provider.
+
+        Args:
+            deploy: The owning :class:`DeployACT` (runs the specialist model).
+            predictor: Optional callable ``obs -> (K, 6) ndarray`` overriding the
+                real inference path (used in tests to avoid loading a checkpoint).
+        """
+        self._deploy = deploy
+        self._predictor = predictor
+        self.obs = None
+
+    def predict_chunk(self, position: np.ndarray, quaternion: np.ndarray):
+        """Return the specialist's next TCP-velocity chunk for the latest obs.
+
+        Args:
+            position: Current TCP position ``(3,)`` (unused; the chunk is resolved
+                from ``obs`` for image+pose consistency, but accepted for protocol
+                symmetry with :class:`_AuxBearingProvider`).
+            quaternion: Current TCP orientation ``(4,)`` (unused; see above).
+
+        Returns:
+            The ``(K, 6)`` base_link twist chunk, or None when no observation is
+            available yet (the descent then holds this cycle).
+        """
+        if self.obs is None:
+            return None
+        if self._predictor is not None:
+            return self._predictor(self.obs)
+        return self._deploy._predict_specialist_chunk(self.obs)
+
+
 class DeployACT(Policy):
     def __init__(self, parent_node: Node):
         super().__init__(parent_node)
@@ -204,6 +249,42 @@ class DeployACT(Policy):
             and self._guarded_config is not None
             and self._guarded_config.use_aux_bearing
         )
+        # Learned insertion specialist (AIC_SPECIALIST): a SEPARATE checkpoint that
+        # takes over from the scripted guarded descent once the stall latches
+        # (INSERTION_PLAN.md change #2). Loaded once here, same lifecycle as the
+        # main ckpt; only when the specialist is enabled (default OFF -> None, no
+        # load, byte-identical). The specialist is K=8, state_dim=13 (pose7+wrench6),
+        # NO aux head. Path via AIC_SPECIALIST_CKPT (mirrors AIC_CKPT).
+        self._specialist_enabled = bool(
+            self._guarded_config is not None and self._guarded_config.specialist_enabled
+        )
+        self._spec_model: _Policy | None = None
+        specialist_banner = "OFF"
+        if self._specialist_enabled:
+            spec_ckpt_path = os.environ.get(
+                "AIC_SPECIALIST_CKPT", "/home/kiwoos/training/ckpt/specialist_k8.pt"
+            )
+            sck = torch.load(spec_ckpt_path, map_location=self.device, weights_only=False)
+            self._spec_K = int(sck["K"])
+            self._spec_state_dim = int(
+                sck.get("state_dim", state_assembly.POSE_WRENCH_DIM)
+            )
+            self._spec_model = _Policy(
+                self._spec_K, state_dim=self._spec_state_dim, aux_dim=0
+            ).to(self.device)
+            self._spec_model.load_state_dict(sck["model"])
+            self._spec_model.eval()
+            self._spec_amean = sck["amean"].to(self.device)
+            self._spec_astd = sck["astd"].to(self.device)
+            self._spec_smean = sck["smean"].to(self.device)
+            self._spec_sstd = sck["sstd"].to(self.device)
+            gc = self._guarded_config
+            specialist_banner = (
+                f"ON (ckpt={spec_ckpt_path}, K={self._spec_K}, "
+                f"state_dim={self._spec_state_dim}, exec_steps={gc.specialist_exec_steps}, "
+                f"dt={gc.specialist_dt:g}s, travel_cap={gc.specialist_travel_cap*1e3:g}mm, "
+                f"max_steps={gc.specialist_max_steps or 'unlimited'})"
+            )
         guarded_banner = "OFF"
         if self._guarded_config is not None:
             gc = self._guarded_config
@@ -235,7 +316,8 @@ class DeployACT(Policy):
             f"{aux_tag}) "
             f"on {self.device}; "
             f"MODE_POSITION receding horizon exec_steps={self.exec_steps} substeps={SUBSTEPS}; "
-            f"temporal_ensembling={ensemble_banner}; guarded_descent={guarded_banner}"
+            f"temporal_ensembling={ensemble_banner}; guarded_descent={guarded_banner}; "
+            f"specialist={specialist_banner}"
         )
 
     def _img(self, raw):
@@ -303,6 +385,43 @@ class DeployACT(Policy):
         with torch.inference_mode():
             act, _ = self._forward(imgs, state)                    # act (1,K,6) norm
         return (act[0] * self.astd + self.amean).cpu().numpy()
+
+    def _predict_specialist_chunk(self, obs) -> np.ndarray:
+        """Run the SPECIALIST checkpoint and return its denormalized twist chunk.
+
+        Assembles the same deploy-legal observation as the main policy (3xRGB +
+        13-D pose+wrench state), but normalizes with the specialist checkpoint's own
+        stats and runs the specialist model (K=8, no aux head). Used by
+        :class:`SpecialistInsertProvider` during the guarded-descent handoff.
+
+        Args:
+            obs: The current ``Observation`` message.
+
+        Returns:
+            A ``(K, 6)`` numpy array of base_link-frame twists (m/s, rad/s).
+
+        Raises:
+            RuntimeError: If called when the specialist model was not loaded.
+        """
+        if self._spec_model is None:
+            raise RuntimeError("specialist model is not loaded (AIC_SPECIALIST off)")
+        imgs = torch.stack([self._img(obs.left_image), self._img(obs.center_image),
+                            self._img(obs.right_image)], 1)          # (1,3,3,H,W)
+        p = obs.controller_state.tcp_pose
+        pose = np.array([p.position.x, p.position.y, p.position.z,
+                         p.orientation.x, p.orientation.y, p.orientation.z,
+                         p.orientation.w], dtype=np.float32)
+        wrench = None
+        if self._spec_state_dim == state_assembly.POSE_WRENCH_DIM:
+            w = obs.wrist_wrench.wrench
+            wrench = np.array([w.force.x, w.force.y, w.force.z,
+                               w.torque.x, w.torque.y, w.torque.z], dtype=np.float32)
+        raw_state = state_assembly.assemble_state(pose, wrench, self._spec_state_dim)
+        state = torch.from_numpy(raw_state).to(self.device).unsqueeze(0)
+        state = (state - self._spec_smean) / self._spec_sstd
+        with torch.inference_mode():
+            act = self._spec_model(imgs, state)                     # (1,K,6) norm (no aux)
+        return (act[0] * self._spec_astd + self._spec_amean).cpu().numpy()
 
     def _predict_offset(self, obs) -> PortOffsetPrediction | None:
         """Run the aux head and resolve a base_link TCP->port prediction.
@@ -396,8 +515,21 @@ class DeployACT(Policy):
             if self._guarded_config is not None and self._aux_bearing_enabled
             else None
         )
+        # Learned insertion specialist provider (None unless AIC_SPECIALIST on),
+        # whose ``obs`` the loop refreshes each cycle so the specialist reads the
+        # live observation during the descent. When None the controller uses the
+        # scripted GuardedDescent -- byte-identical to today.
+        spec_provider = (
+            SpecialistInsertProvider(self)
+            if self._guarded_config is not None and self._specialist_enabled
+            else None
+        )
         guarded = (
-            GuardedDescentController(self._guarded_config, bearing_provider=aux_provider)
+            GuardedDescentController(
+                self._guarded_config,
+                bearing_provider=aux_provider,
+                specialist_provider=spec_provider,
+            )
             if self._guarded_config is not None
             else None
         )
@@ -426,6 +558,8 @@ class DeployACT(Policy):
             if guarded is not None:
                 if aux_provider is not None:
                     aux_provider.obs = obs  # refresh the aux head's live obs
+                if spec_provider is not None:
+                    spec_provider.obs = obs  # refresh the specialist's live obs
                 p_g = obs.controller_state.tcp_pose
                 pos_g = np.array([p_g.position.x, p_g.position.y, p_g.position.z])
                 quat_g = np.array([p_g.orientation.x, p_g.orientation.y,

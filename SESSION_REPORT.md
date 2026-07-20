@@ -858,3 +858,29 @@ retrain regresses shippable officials (the v3fix failure); mitigated by warm-sta
 
 **Infra fix this cycle:** guarded_trace.log now written per-trial via
 AIC_GUARDED_TRACE_DIR (was interleaving at repo-root CWD); 170 tests green.
+
+## 2026-07-20 02:15 — Learned insertion specialist v1: first in-sim eval (P-INSERT-1)
+
+| Experiment | Verdict | Key metrics |
+|---|---|---|
+| Two-policy handoff mechanism | WORKS | clean HANDOFF at stall (t~16s), force-aware descent, [specialist] telemetry per-trial, no crash |
+| Specialist vs scripted, officials n=3 | MIXED / no adoption | off1 12.2 (−21.6) / off2 41.5 (+2.1) / off3 37.6 (+3.8); mean 30.4 vs scripted 35.7; **0 insertions** |
+
+Specialist = ACT K=8, BC on the 15 s last-inch of 77 SFP oracle successes, obs = 3×RGB
++ 13-D pose+wrench, encoder warm-started from v2_wide. Env-gated `AIC_SPECIALIST=1`
+(OFF by default → shipped capped-aux config untouched).
+
+Findings: (1) the two-policy architecture is validated end-to-end — approach → stall →
+learned specialist handoff fires and drives a force-aware descent. (2) On aligned poses
+(official_2/3) the specialist is a small genuine improvement (holds clean proximity,
+slightly better than the scripted descent). (3) On official_1 (the hard mount-collision
+pose) it drives ~67 mm OFF-AXIS (plug ends 0.08–0.13 m from port, −24 collision) — an
+out-of-distribution stall pose the vertical last-inch policy extrapolates wrongly on.
+(4) **No pose seats** — even the wins only reach 0.05–0.06 m; the specialist holds at
+proximity rather than pushing decisively through. Likely causes (to be quantified by the
+analysis cycle): oracle last-inch is ~pure vertical descent (no lateral correction to
+learn), and/or the 15 s window leaks slow-approach/near-zero-velocity frames so the policy
+learned "hold" not "push", and/or the deploy handoff state (~0.05 m) is OOD vs the training
+window start. Specialist stays gated OFF; next step decided by the analysis+design cycle
+(leading candidate: HYBRID — aux-bearing guarded descent for approach/lateral + specialist
+only for the final force-push).

@@ -17,7 +17,12 @@
 
 import numpy as np
 
-from aic_example_policies.ros.cheatcode_targeting import resolve_port_approach
+from aic_example_policies.ros.cheatcode_targeting import (
+    SC_APPROACH_STANDOFF_M,
+    SC_PORT_TYPE,
+    resolve_port_approach,
+    sc_entrance_waypoint,
+)
 from aic_model.policy import (
     GetObservationCallback,
     MoveRobotCallback,
@@ -77,8 +82,26 @@ class CheatCode(Policy):
         position_fraction: float = 1.0,
         z_offset: float = 0.1,
         reset_xy_integrator: bool = False,
+        target_position_base: np.ndarray | None = None,
     ) -> Pose:
-        """Find the gripper pose that results in plug alignment."""
+        """Find the gripper pose that results in plug alignment.
+
+        Args:
+            port_transform: Port (or entrance) frame pose in ``base_link``; its
+                orientation drives the plug-alignment slerp.
+            slerp_fraction: Interpolation fraction for the orientation slerp.
+            position_fraction: Interpolation fraction for the position blend.
+            z_offset: Legacy world-z standoff above ``port_transform`` used only
+                when ``target_position_base`` is None.
+            reset_xy_integrator: When True, zero the xy error integrators.
+            target_position_base: Optional explicit plug-tip target ``[x, y, z]``
+                in ``base_link``. When None (SFP / legacy), the target is the port
+                xy and ``port.z + z_offset`` (byte-identical to the historical
+                primitive). When provided (SC pose-conditioned path), it is used
+                directly, letting the caller stage/descend along the port's true
+                insertion axis instead of world-z. Reduces to the legacy target
+                exactly when the axis is world-vertical.
+        """
         q_port = (
             port_transform.rotation.w,
             port_transform.rotation.x,
@@ -122,10 +145,23 @@ class CheatCode(Policy):
             gripper_tf_stamped.transform.translation.y,
             gripper_tf_stamped.transform.translation.z,
         )
-        port_xy = (
-            port_transform.translation.x,
-            port_transform.translation.y,
-        )
+        # Plug-tip target in base_link. Legacy (SFP / target_position_base None):
+        # the port xy and port.z + z_offset (world-z hover/descent). Pose-
+        # conditioned (SC): an explicit point supplied by the caller along the
+        # port's insertion axis.
+        if target_position_base is None:
+            target_base = (
+                port_transform.translation.x,
+                port_transform.translation.y,
+                port_transform.translation.z + z_offset,
+            )
+        else:
+            target_base = (
+                float(target_position_base[0]),
+                float(target_position_base[1]),
+                float(target_position_base[2]),
+            )
+        port_xy = (target_base[0], target_base[1])
         plug_xyz = (
             plug_tf_stamped.transform.translation.x,
             plug_tf_stamped.transform.translation.y,
@@ -163,7 +199,7 @@ class CheatCode(Policy):
 
         target_x = port_xy[0] + i_gain * self._tip_x_error_integrator
         target_y = port_xy[1] + i_gain * self._tip_y_error_integrator
-        target_z = port_transform.translation.z + z_offset - plug_tip_gripper_offset[2]
+        target_z = target_base[2] - plug_tip_gripper_offset[2]
 
         blend_xyz = (
             position_fraction * target_x + (1.0 - position_fraction) * gripper_xyz[0],
@@ -197,10 +233,11 @@ class CheatCode(Policy):
 
         # Resolve the port frame + descent floor from the port type. SFP keeps the
         # historical target (`..._link`, floor -0.015); SC retargets to the
-        # dedicated entrance frame with a shallower floor (see cheatcode_targeting).
-        # TODO(YAWFIX): the SC entrance frame + floor were derived statically from
-        # `SC Port/model.sdf`; the log line below prints what actually resolved so
-        # the post-campaign 15-min sim validation can confirm quickly.
+        # dedicated entrance frame with a shallower floor -0.007 (see
+        # cheatcode_targeting). SC additionally stages + descends along a pose-
+        # conditioned insertion axis (below) rather than a fixed world-z line. The
+        # log lines print what actually resolved so the post-B revalidation
+        # (4-6 SC-pose trials; gate success >=85, contacts 0) can confirm quickly.
         approach = resolve_port_approach(
             task.target_module_name, task.port_name, task.port_type
         )
@@ -229,10 +266,56 @@ class CheatCode(Policy):
             return False
         port_transform = port_tf_stamped.transform
 
-        z_offset = 0.2
+        # SC uses a pose-conditioned staging waypoint + insertion axis derived from
+        # the (privileged, teacher-side) entrance-frame pose, so staging and descent
+        # follow the port's true axis instead of a fixed world-z line (fixes the
+        # off-axis graze under eval-band yaw; see cheatcode_targeting). SFP keeps the
+        # legacy world-z path byte-identical (target_position_base stays None).
+        is_sc = task.port_type.strip().lower() == SC_PORT_TYPE
+        sc_axis = None
+        entrance_pos = None
+        if is_sc:
+            entrance_pos = np.array(
+                [
+                    port_transform.translation.x,
+                    port_transform.translation.y,
+                    port_transform.translation.z,
+                ]
+            )
+            entrance_quat = np.array(
+                [
+                    port_transform.rotation.x,
+                    port_transform.rotation.y,
+                    port_transform.rotation.z,
+                    port_transform.rotation.w,
+                ]
+            )
+            sc_approach = sc_entrance_waypoint(entrance_pos, entrance_quat)
+            sc_axis = sc_approach.insertion_axis
+            self.get_logger().info(
+                f"SC pose-conditioned waypoint: approach={sc_approach.approach_point} "
+                f"insertion_axis={sc_axis} standoff={sc_approach.standoff_m}"
+            )
+
+        def sc_target(z: float) -> np.ndarray | None:
+            """Plug-tip target ``z`` metres outside the entrance along the port axis.
+
+            Returns None for SFP so ``calc_gripper_pose`` keeps its legacy world-z
+            target. For SC, ``entrance_pos - z * insertion_axis`` places the target
+            ``z`` m outside the mouth (``z`` = standoff at staging) and steps it into
+            the port as ``z`` -> descent floor; reduces to the legacy world-z target
+            when the axis is world-vertical.
+            """
+            if not is_sc:
+                return None
+            return entrance_pos - z * sc_axis
+
+        # Staging standoff: SC uses the named pose-conditioned constant; SFP the
+        # historical 0.2 m world-z hover (identical value, kept explicit).
+        z_offset = SC_APPROACH_STANDOFF_M if is_sc else 0.2
 
         # Over five seconds, smoothly interpolate from the current position to
-        # a position above the port.
+        # the pre-insertion staging waypoint.
         for t in range(0, 100):
             interp_fraction = t / 100.0
             try:
@@ -244,6 +327,7 @@ class CheatCode(Policy):
                         position_fraction=interp_fraction,
                         z_offset=z_offset,
                         reset_xy_integrator=True,
+                        target_position_base=sc_target(z_offset),
                     ),
                 )
             except TransformException as ex:
@@ -251,7 +335,7 @@ class CheatCode(Policy):
             self.sleep_for(0.05)
 
         # Descend until the cable is inserted into the port. The floor is
-        # per-port-type (SFP -0.015; SC shallower -- stop at the entrance frame).
+        # per-port-type (SFP -0.015; SC shallower -0.007 -- just past the entrance).
         while True:
             if z_offset < descent_floor_z:
                 break
@@ -261,7 +345,11 @@ class CheatCode(Policy):
             try:
                 self.set_pose_target(
                     move_robot=move_robot,
-                    pose=self.calc_gripper_pose(port_transform, z_offset=z_offset),
+                    pose=self.calc_gripper_pose(
+                        port_transform,
+                        z_offset=z_offset,
+                        target_position_base=sc_target(z_offset),
+                    ),
                 )
             except TransformException as ex:
                 self.get_logger().warn(f"TF lookup failed during insertion: {ex}")

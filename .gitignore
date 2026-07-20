@@ -36,3 +36,4 @@ ckpt/
 
 # eval run artifacts
 results/
+guarded_trace.log

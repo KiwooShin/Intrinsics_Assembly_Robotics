@@ -23,10 +23,28 @@ conventions were mirrored from the model SDFs:
 * SC  entrance: ``sc_port_base_link_entrance``   (``SC Port`` model, offset -0.01564)
 
 so an entrance frame is uniformly ``{port_name}_link_entrance``.
+
+Beyond *which* frame to approach, SC also needs a pose-conditioned **pre-insertion
+waypoint**: the generic primitive staged the plug a fixed amount straight up in
+``base_link`` world-z above the port frame and then descended straight down. That
+ignores the port's actual orientation, so under the eval-band board yaw + the
+small target roll/pitch jitter the staging point and descent drift off the port's
+true insertion axis and the plug grazes a distractor mount (observed contact ~-24,
+Phase-2 forensics ``docs/research_2026-07-19/01_failure_forensics.md`` section 4).
+:func:`sc_entrance_waypoint` computes the staging point and the insertion axis
+*from the port pose the oracle already reads* (privileged, teacher-side only): the
+SC entrance frame's local +z points into the port (the entrance sits at local
+``-z = -0.01564`` under ``sc_port_base_link``), so the pre-insertion waypoint is
+the entrance position stepped :data:`SC_APPROACH_STANDOFF_M` back out along that
+axis. The function is pure (pose in -> waypoint out) so it unit-tests without ROS.
 """
 from __future__ import annotations
 
 import dataclasses
+
+import numpy as np
+
+from aic_example_policies.ros.port_offset import rotate_vector_by_quat
 
 # ``Task.port_type`` value (aic_task_interfaces/Task.msg) that denotes an SC port.
 SC_PORT_TYPE = "sc"
@@ -37,14 +55,33 @@ SC_PORT_TYPE = "sc"
 # SFP keeps the historically-tuned value so SFP behaviour is byte-identical.
 SFP_DESCENT_FLOOR_Z = -0.015
 # SC targets the *entrance* frame (already offset into the port mouth), so the
-# descent should be shallow -- stop at the entrance rather than -0.015 past the
-# rotated port centre.
+# descent should be shallow -- stop just past the entrance rather than -0.015 past
+# the rotated port centre (which rammed the port body).
 #
-# TODO(YAWFIX): 0.0 stops the plug exactly at the SC entrance frame. If the
-# post-campaign 15-min sim validation shows the plug does not fully seat
-# (insertion_events == 0 / total < 85), lower this toward -0.005 / -0.010. Kept a
-# named constant so tuning is a one-line change and requires no ROS.
-SC_DESCENT_FLOOR_Z = -0.005
+# Phase-2 forensics (docs/research_2026-07-19/01_failure_forensics.md section 4)
+# found -0.005 seated the *official* SC pose but left off-official poses partially
+# inserted (insertion_events == 0, score 62.8/65.0): the descent stopped ~2 mm
+# short of full seating. The forensic recommendation was to micro-tune the floor
+# to ~-0.007 (2 mm deeper) and re-validate zero-contact. -0.007 stays well inside
+# the -0.01564 entrance offset so it cannot reach the port body.
+#
+# TODO(YAWFIX): if the post-B revalidation (4-6 SC-pose trials) still shows
+# insertion_events == 0 with contacts == 0, lower further toward -0.010; if any
+# contact reappears, raise back toward -0.005. Kept a named constant so tuning is
+# a one-line change and requires no ROS.
+SC_DESCENT_FLOOR_Z = -0.007
+
+# --- Pose-conditioned SC entrance-waypoint geometry (used by sc_entrance_waypoint) ---
+# The SC entrance frame's local +z axis points *into* the port: the entrance link
+# sits at local (0, 0, -0.01564) under ``sc_port_base_link`` (SC Port/model.sdf),
+# so travelling from the entrance toward the seated pose is +z, and the direction
+# out of the mouth (where the plug stages before insertion) is -z.
+PORT_INSERTION_AXIS_LOCAL: tuple[float, float, float] = (0.0, 0.0, 1.0)
+# Pre-insertion standoff (m): how far *outside* the entrance mouth, along the port
+# axis, the pose-conditioned staging waypoint sits. Matches the legacy fixed hover
+# height (0.2 m) so the working official SC pose is preserved; kept a named
+# constant so the standoff is a one-line, ROS-free tuning knob.
+SC_APPROACH_STANDOFF_M: float = 0.2
 
 
 @dataclasses.dataclass(frozen=True)
@@ -97,3 +134,85 @@ def resolve_port_approach(
             frame=f"{base_frame}_entrance", descent_floor_z=SC_DESCENT_FLOOR_Z
         )
     return PortApproach(frame=base_frame, descent_floor_z=SFP_DESCENT_FLOOR_Z)
+
+
+@dataclasses.dataclass(frozen=True)
+class EntranceApproach:
+    """A pose-conditioned pre-insertion staging point and its insertion axis.
+
+    Attributes:
+        approach_point: The pre-insertion staging point ``[x, y, z]`` in the same
+            frame as the input port pose (typically ``base_link``), sitting
+            :attr:`standoff_m` outside the entrance mouth along the port axis.
+        insertion_axis: Unit vector ``[x, y, z]`` (same frame) pointing *into* the
+            port -- the direction the plug should descend/insert along. Descend
+            from :attr:`approach_point` along ``+insertion_axis`` to seat.
+        standoff_m: The standoff distance (m) used, i.e.
+            ``approach_point = entrance_position - standoff_m * insertion_axis``.
+    """
+
+    approach_point: np.ndarray
+    insertion_axis: np.ndarray
+    standoff_m: float
+
+
+def sc_entrance_waypoint(
+    entrance_position: np.ndarray,
+    entrance_orientation: np.ndarray,
+    standoff_m: float = SC_APPROACH_STANDOFF_M,
+) -> EntranceApproach:
+    """Compute a pose-conditioned SC pre-insertion waypoint from the port pose.
+
+    Replaces the legacy fixed-frame waypoint (a fixed world-z hover straight above
+    the port frame) with one derived from the port's actual pose. The SC entrance
+    frame's local :data:`PORT_INSERTION_AXIS_LOCAL` (``+z``) points into the port,
+    so this rotates that axis into the pose's frame to get the base-frame insertion
+    direction, then steps ``standoff_m`` back out along it to place the staging
+    point outside the mouth::
+
+        insertion_axis = R(entrance_orientation) @ PORT_INSERTION_AXIS_LOCAL
+        approach_point = entrance_position - standoff_m * insertion_axis
+
+    The function is pure (pose in -> waypoint out) and free of ROS/Gazebo imports so
+    it unit-tests on any machine. At the canonical SC mount the resolved axis is
+    ~world-vertical, so this reduces to the legacy straight-down descent; under the
+    eval-band board yaw and the target roll/pitch jitter it tracks the true axis.
+
+    Args:
+        entrance_position: The SC entrance frame origin ``[x, y, z]`` (m),
+            expressed in ``base_link`` (or any frame; the result is in that frame).
+        entrance_orientation: The SC entrance frame orientation as a quaternion
+            ``[x, y, z, w]`` (``geometry_msgs/Quaternion`` field order) in the same
+            frame; renormalized internally.
+        standoff_m: Pre-insertion standoff distance (m) along the port axis;
+            defaults to :data:`SC_APPROACH_STANDOFF_M`. Must be finite and >= 0.
+
+    Returns:
+        The :class:`EntranceApproach` with the staging point and the unit
+        base-frame insertion axis.
+
+    Raises:
+        ValueError: If ``entrance_position`` is not 3 finite values, ``standoff_m``
+            is negative or non-finite, or ``entrance_orientation`` has near-zero
+            norm (delegated to :func:`port_offset.rotate_vector_by_quat`).
+    """
+    pos = np.asarray(entrance_position, dtype=np.float64).reshape(-1)
+    if pos.shape[0] != 3:
+        raise ValueError(
+            f"entrance_position must have length 3, got {pos.shape[0]}"
+        )
+    if not np.all(np.isfinite(pos)):
+        raise ValueError(f"entrance_position must be finite, got {entrance_position!r}")
+    if not np.isfinite(standoff_m):
+        raise ValueError(f"standoff_m must be finite, got {standoff_m!r}")
+    if standoff_m < 0.0:
+        raise ValueError(f"standoff_m must be >= 0, got {standoff_m!r}")
+    insertion_axis = rotate_vector_by_quat(
+        entrance_orientation, np.asarray(PORT_INSERTION_AXIS_LOCAL, dtype=np.float64)
+    )
+    approach_point = pos - float(standoff_m) * insertion_axis
+    return EntranceApproach(
+        approach_point=approach_point,
+        insertion_axis=insertion_axis,
+        standoff_m=float(standoff_m),
+    )

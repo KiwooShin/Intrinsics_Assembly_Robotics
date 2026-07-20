@@ -803,3 +803,22 @@ invalidates all historical SC-stratum scores in eval_suite_smoke baselines (they
 structurally unwinnable); ab5 ladder gauge unaffected (no SC cfgs). Deploy default is
 now capped-aux (v2_auxprobe.pt + AIC_GUARDED_AUX=1). guarded_trace.log CWD bug
 confirmed (writes repo root; gitignored) — code fix scheduled 00:00 cycle.
+
+### 23:45 addendum — SC floor −0.010 reval2 verdict (results/sc_oracle_reval2)
+
+| Pose | −0.007 | −0.010 | Verdict |
+|---|---|---|---|
+| official_3 | 93.5 SEAT | 93.5 SEAT | regression clean |
+| cfg_006 | 58.2 partial | 93.2 SEAT | CONVERTED |
+| cfg_007 | 93.5 SEAT | 93.2 SEAT | regression clean |
+| cfg_002 | 57.7 partial | 64.0 partial | blocked at 0.01 m |
+| cfg_003 | 57.9 partial | 57.9 partial | blocked (unchanged) |
+| cfg_010 | 43.6 near-miss | 58.0 partial | improved, blocked |
+| cfg_011 | 58.0 partial | 58.0 partial | blocked (unchanged) |
+
+Zero contacts in 7/7. Floor iteration ENDS (one micro-tune used; −0.010 kept —
+strictly ≥ −0.007 everywhere). SC keep-rate 3/7 < 5/8 P2 gate → NO broad SC demo
+collection; seated-pose-only collection (official_3, cfg_006, cfg_007) allowed as
+secondary. Remaining partials stall at exactly 0.01 m regardless of floor depth →
+pose-dependent binding (lateral/angular misalignment at the mouth), not depth —
+handed to 00:00 analysis agents.

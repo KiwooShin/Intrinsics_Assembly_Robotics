@@ -13,6 +13,38 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-20 02:15 — Run #2 cycle 4: learned insertion specialist v1 — two-policy works, seat still open
+
+**Avg score (officials n=3, 180 s, specialist handoff `AIC_SPECIALIST=1`):** mean
+**30.4** vs scripted-descent baseline 35.7 — per pose official_1 12.2 (−21.6),
+official_2 41.5 (+2.1), official_3 37.6 (+3.8). **0 insertions.** Specialist =
+ACT K=8 BC'd on the 15 s last-inch of 77 SFP oracle successes (obs 3×RGB +
+pose + 6-D wrench, encoder warm-started from v2_wide). Env-gated OFF by default,
+so the adopted ab5 28.0/IQM 35.8 config is untouched; this is a research probe.
+
+**What's missing:** the seat, still. The two-policy machinery is validated
+(approach → stall → learned-specialist handoff fires, force-aware descent,
+per-trial `[specialist]` telemetry) and the specialist is a small genuine gain
+on the two aligned officials — but (1) it holds at 0.05–0.06 m instead of
+pushing decisively through, so nothing seats; (2) on official_1 it drives ~67 mm
+off-axis into the mount (−24), an OOD stall pose the vertical last-inch policy
+extrapolates wrong. Root-cause hypotheses (being quantified this cycle): the
+oracle's last-inch is ~pure vertical descent (no lateral-correction signal to
+clone), the 15 s window likely leaks slow/near-zero-velocity frames (policy
+learned "hold" not "push"), and the deploy handoff pose (~0.05 m) may sit outside
+the training window's start.
+
+**Next 4 h:** analysis+design workflow (2 agents: specialist forensics from the
+guarded traces + training data; design pick) → adopt one of HYBRID (aux-bearing
+descent for approach/lateral + specialist only for the final force-push when the
+wrench plateaus — protects the official_2/3 gains, dodges the official_1 drift),
+tighter last-inch window (6–8 s) + K=4 + push-weighting, or oracle DAgger at the
+stall states → retrain offline (GPU free) → re-eval officials n=3, gate ≥1
+insertion AND official_1 no-regression. Approach-side dead-band retrain remains a
+complementary follow-on. SOTA referenced: ACT (2304.13705), From Reach to Insert
+(2605.04649, hybrid handoff), FILIC (2509.17053, force channel), TER-DAgger
+(2603.04038, force-triggered oracle DAgger).
+
 ## 2026-07-20 00:05 — Run #2 cycle 3: capped-aux adopted, SC oracle+configs fixed, seat still the wall
 
 **Avg score (ab5 gauge, n=15 = 3 officials×3 + cfg_001×3 + cfg_005×3, 180 s):**

@@ -884,3 +884,17 @@ learned "hold" not "push", and/or the deploy handoff state (~0.05 m) is OOD vs t
 window start. Specialist stays gated OFF; next step decided by the analysis+design cycle
 (leading candidate: HYBRID — aux-bearing guarded descent for approach/lateral + specialist
 only for the final force-push).
+
+## 2026-07-20 03:06 — Push specialist probe (aligned poses) + spiral-search primitive
+
+| Experiment | Verdict | Key metrics |
+|---|---|---|
+| Decisive-push specialist v2 (specialist_push_k4, aligned poses) | push FIXED, still 0 seats | official_2 42.0/41.1/42.2 (clean 0.05m); official_3 32.7 (0.08m); **decisive |v0| 0.024 m/s, force→8N** (vs v1 hold), but **JAMS at ~30mm travel — plug catches the port rim, deflects, never enters** |
+| SearchDescent primitive (scripted spiral search) | BUILT + tested | 214 ros tests (+24); AIC_SEARCH gate; bounded Archimedean spiral (r→4mm/3turns) + Z push under light contact, 12N back-off kept; probe next |
+
+Root cause of the seat wall is now fully decomposed: **reach** (solved, approach → 0.05m),
+**push** (solved, push specialist is decisive), **mouth alignment/search** (the remaining
+blocker — even on aligned officials the plug binds on the rim; the oracle last-inch has no
+lateral search to clone, and a straight push deflects). Fix under test = scripted spiral
+search (probe pending). Push probe stopped early after the jam was confirmed across
+official_2 ×3 + official_3, to free the sim for the search probe (higher-value experiment).

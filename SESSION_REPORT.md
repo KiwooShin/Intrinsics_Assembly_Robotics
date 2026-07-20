@@ -970,3 +970,24 @@ val-offset = the decision metric (<10mm → seat attempt via AIC_SEARCH_AUX re-c
 Reflection: the pivot was correct but infra bring-up cost ~5 single-trial cycles
 before switching to KEEP_BAG offline iteration — should have retained bags from the
 first failure.
+
+## 2026-07-20 12:00 — Run #3 cycle 1: seat-execution plan sharpened by 2 analysis agents
+
+No new engine scores (Stage-1 DAgger collection in flight: 32/48 keeps, 28 SFP/4 SC,
+1 benign per-config frame-naming drop). Two analysis sub-agents (plan-critique/risk,
+literature-comparison) reviewed the committed two-stage seat plan and converged on:
+
+| # | Finding | Change to plan |
+| - | ------- | -------------- |
+| 1 | <10mm loc gate too loose; real gate = force-reactive capture radius ~2-5mm (2204.07776: 66-78%@5mm -> 37-63%@10mm) | Gate localization on the MEASURED capture radius, not a fixed 10mm |
+| 2 | Pooled per-frame median hides SC (28 SFP frames dominate); SC 61mm is the target | Eval SFP/SC SEPARATELY, leave-one-SC-out, p75/p90 near-port |
+| 3 | Disasm-standalone on aligned poses is the true capability test + cheapest kill test; needs no localization | First-seat signal = disasm-standalone aligned official_2/3+cfg_005; don't gate behind localization |
+| 4 | Reversed wrench is dynamically invalid (AutoMate 2407.08028 records only reversed PATH; friction shear flips) | Train disasm specialist with AND without --wrench (ablation) |
+| 5 | Latch may weld during ~20s slow descent (TouchPlugin resets on break not motion); single -0.013 default spans SFP world-z + SC insertion-axis | Keep the "verify 1 unit insertion_events==0" guard; confirm retract_start_z per plug |
+
+Highest-value de-risk (literature): capture-radius sweep (lateral offset 0->15mm from
+oracle pre-insertion pose, seat-success curve) to calibrate the real gate and decouple
+localization error from seating capability. First seat expected on SFP (13mm), not SC.
+Refs: AutoMate 2407.08028, InsertionNet 2104.14223 / 2.0 2203.01153, IndustReal
+2305.17110, seam-fill 2204.07776, tactile-from-disassembly 2604.20712, IL peg 2210.01340.
+Still 0 seats; capped-aux IQM 35.8 banked. No code changed this cycle (docs only).

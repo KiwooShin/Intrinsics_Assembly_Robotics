@@ -13,6 +13,46 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-20 12:00 — Run #3 cycle 1: seat-execution plan sharpened (2 analysis agents); collection 32/48
+
+**Avg score:** still **0 insertions** (~165 trials); banked floor unchanged
+(capped-aux ab5 IQM 35.8 vs 23.1). No new engine scores this window — Stage-1 DAgger
+collection is in flight (**32/48 keeps, 28 SFP / 4 SC, 1 benign drop**; the drop was a
+per-config frame-naming edge, `nic_card_mount_3/sfp_port_1_link_entrance` absent from
+its bag — isolated, collection robust). GPU idle, reserved for the retrain.
+
+Two analysis sub-agents (plan-critique/risk + literature-comparison) reviewed the
+committed two-stage seat plan. **They converged on three plan changes**, table below.
+
+| Analysis topic | Verdict | Key finding / change |
+| --- | --- | --- |
+| Localization <10 mm gate | **Too loose** | Real gate = force-reactive **capture radius** ≈ 2–5 mm (up to ~10 mm only w/ slow spiral). arXiv:2204.07776: seat success 66–78 %@5 mm → 37–63 %@10 mm. 10 mm is the ragged edge, not "will-seat". |
+| SC vs SFP eval | **Split required** | Pooled per-frame median is dominated by 28 SFP frames; SC's 61 mm offset is the real target. Do **leave-one-SC-out**, gate on SC lateral at **p75/p90**, near-port subset. |
+| First-seat test / kill order | **Reorder** | **Disasm-standalone on aligned poses (official_2/3, cfg_005) is the true capability test AND cheapest kill test** — needs no localization; if it seats 0 even aligned, the localizer is moot. Don't gate it behind localization. |
+| Reversed wrench conditioning | **Risk** | AutoMate (2407.08028) records only the reversed *path* — time-reversed friction shear is non-physical. Our `reverse_disasm` keeps wrench sign → `--wrench` may hurt. **Ablate with/without wrench** (or normal-force magnitude only). |
+| Latch-during-descent | **Verify** | TouchPlugin may weld during the ~20 s slow descent (resets on contact-break, not motion). The plan's "verify 1 unit, insertion_events==0" guard covers this; also confirm `retract_start_z=-0.013` is shallower than seat floor per plug (SFP world-z vs SC insertion-axis differ). |
+
+**What's missing:** the seat, still gated on numbers not yet measured — now **two**
+numbers, correctly separated: (a) **localization SC/SFP held-out lateral error** vs the
+capture radius (not a fixed 10 mm), and (b) the **disasm specialist's capture radius**
+on aligned poses. The literature's single highest-value de-risk is a **capture-radius
+sweep** (lateral offset 0→15 mm from an oracle pre-insertion pose, seat-success curve)
+— it calibrates the real gate and decouples the two unknowns. First seat almost
+certainly comes from **SFP** (13 mm, nearest solvable); SC (61 mm) is a pure
+localization problem regardless of seater.
+
+**Next 4 h:** collection finishes ~14:20 (DAGGERDONE). Then, GPU/sim serialized:
+(1) localization retrain (GPU, sim idle) → `dagger_aux.pt`; (2) **eval SFP and SC
+separately** (leave-one-SC-out, p50/p75/p90, near-port) → record both decision numbers;
+(3) verify 1 SFP disasm unit (`insertion_events==0`) → full SFP disasm collection (sim);
+(4) train disasm specialist **k8 with-wrench AND no-wrench (ablation)**; (5) **first-seat
+test = disasm-standalone on aligned official_2/3+cfg_005** (probe_batch, AIC_SPECIALIST)
+— ≥1 insertion = FIRST SEAT → demo+adopt+push. Revised KILL: disasm-standalone 0 seats
+on aligned poses AND localization worse than the measured capture radius → ship
+capped-aux, insertion→Track-L P3, pivot to MAX officials/ab5. SOTA/refs: AutoMate
+2407.08028, InsertionNet 2104.14223 / 2.0 2203.01153, IndustReal 2305.17110, seam-fill
+2204.07776, tactile peg-from-disassembly 2604.20712.
+
 ## 2026-07-20 07:30 — Run #2 cycle 7: DAgger localization pipeline live, collecting
 
 **Avg score:** still **0 insertions** (~165 trials); the banked deploy config

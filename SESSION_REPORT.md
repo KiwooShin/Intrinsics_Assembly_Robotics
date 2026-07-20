@@ -898,3 +898,28 @@ blocker — even on aligned officials the plug binds on the rim; the oracle last
 lateral search to clone, and a straight push deflects). Fix under test = scripted spiral
 search (probe pending). Push probe stopped early after the jam was confirmed across
 official_2 ×3 + official_3, to free the sim for the search probe (higher-value experiment).
+
+## 2026-07-20 04:30 — Cycle 5: seat wall = LATERAL mis-localization (geometry forensics)
+
+| Finding | Evidence |
+|---|---|
+| Depth is SOLVED | official_2 plug→mouth dz ≈ 0 (−0.1/−2.3/−0.6 mm across runs); tip reaches the mouth plane |
+| Wall is LATERAL | official_2 tip 13 mm off-center (rests on housing rim, bore 1–2.5 mm wide); official_3 (SC) 26–61 mm off |
+| Search radius < offset | 10 mm spiral swept full radius but 10 < 13 mm → never crosses the hole → "No insertion" 0.05 m |
+| Aux does NOT transfer | val lateral 0.86 cm becomes 15 mm (best) to 61 mm (worst) in deployment; high-variance |
+| Vertical axis works | `axis=(0,0,-1)` confirmed; engages contact 10–11 N at mouth depth |
+
+Method inventory this cycle (all env-gated OFF, byte-identical off; 222 ros tests):
+decisive-push specialist (specialist_push_k4.pt, fixes v1 hold), SearchDescent
+(`AIC_SEARCH`, scripted spiral+push under light contact, 12 N back-off kept),
+world-vertical axis (`AIC_SEARCH_VERTICAL`). Still 0 insertions (~155 trials).
+
+Next: (a) `AIC_SEARCH_RADIUS=0.018` bare v2_wide on official_2/cfg_005 (covers the
+13 mm SFP offset, code-free) = cheapest first-seat attempt; (b) `AIC_SEARCH_AUX`
+aux-centered search (recenter spiral on median-gated aux prediction at handoff;
+guarded_descent.py seam, off=byte-identical) for the larger/variable offsets.
+Design agent's premise that aux→8.6 mm residual is contradicted by the geometry
+agent's 15–61 mm deployment measurement — so aux-centering is a hypothesis to
+test, not a certainty; the enlarged spiral is the more direct lever for official_2.
+Infra: a mid-probe kill left stale model nodes → whole-batch "model not ready"
+failures; fixed by full teardown + letting probes exit naturally (REPS-bounded).

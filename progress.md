@@ -13,6 +13,41 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-20 04:30 — Run #2 cycle 5: seat wall localized — it's LATERAL, depth is solved
+
+**Avg score (search probes, officials, AIC_SEARCH):** official_2 ~42.8, official_3
+~28.8, all "No insertion" at 0.05–0.11 m; **still 0 insertions** in ~155 trials.
+But this cycle turned the seat from a fuzzy wall into a measured, single-axis
+problem. Built and shipped (all env-gated OFF, 222 tests): a decisive-push
+specialist (fixes v1's passive hold), a scripted spiral-search primitive
+(`AIC_SEARCH`), and a world-vertical search axis (`AIC_SEARCH_VERTICAL`, since
+the ports open −z).
+
+**What's missing — now quantified by ground-truth-TF geometry forensics.** The
+seat is **lateral mis-localization, not depth**. On official_2 the plug tip
+reaches the port-mouth *plane* (plug→mouth dz ≈ 0, measured −0.1 to −2.3 mm) but
+sits **~13 mm to the side**, resting on the port housing rim (bore is only
+1–2.5 mm wide, so a 13 mm offset lands on the lip and jams; the apparent "46 mm
+depth" is the port's internal bore the plug never enters). official_3 (SC) is
+worse: **26–61 mm** lateral. The scripted search descends vertically, engages
+contact (10–11 N), reaches mouth depth, and sweeps the full spiral — but the
+10 mm radius < the 13 mm offset, so it never crosses the hole. Critically, the
+**aux bearing does not transfer**: its "0.86 cm val" becomes **15–61 mm in
+deployment** (high-variance), so it can't reliably center the plug.
+
+**Next 4 h:** close the lateral gap. (1) Cheapest first-seat shot — raise the
+search radius above the measured offset (`AIC_SEARCH_RADIUS` 0.018, covers
+official_2's 13 mm; code-free) on the SFP aligned poses. (2) If insufficient /
+for official_3's larger offset — aux-centered search (`AIC_SEARCH_AUX`: recenter
+the spiral once at handoff on the median-gated aux port prediction; small seam in
+guarded_descent.py, off = byte-identical), accepting the aux is noisy so the
+spiral must still absorb ~10 mm residual. Better port-direction sensing is the
+lever; depth/push/axis are done. Gate unchanged: ≥1 insertion + no officials
+regression. SOTA refs: InsertionNet spiral search (2104.14223); From Reach to
+Insert AABB handoff (2605.04649). Process note: let probes exit naturally —
+a mid-probe kill left stale model nodes that failed a whole batch ("model not
+ready"); recovered by full teardown.
+
 ## 2026-07-20 02:15 — Run #2 cycle 4: learned insertion specialist v1 — two-policy works, seat still open
 
 **Avg score (officials n=3, 180 s, specialist handoff `AIC_SPECIALIST=1`):** mean

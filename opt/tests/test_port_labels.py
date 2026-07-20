@@ -223,5 +223,57 @@ class AutoDeriveLogTest(unittest.TestCase):
             self.assertTrue(ls.valid.all())  # both KEEP + inserted, merged logs
 
 
+class PortTargetOverrideTest(unittest.TestCase):
+    """The privileged-DAgger port_target.npy override (dagger_relabel path)."""
+
+    def test_load_port_target_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            ep = _make_episode(
+                pathlib.Path(d), "ep_x", _descend_poses(10, np.array([0.1, 0, 0.1]))
+            )
+            self.assertIsNone(port_labels.load_port_target(ep))
+
+    def test_load_port_target_bad_shape_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            ep = _make_episode(
+                pathlib.Path(d), "ep_x", _descend_poses(10, np.array([0.1, 0, 0.1]))
+            )
+            np.save(pathlib.Path(ep) / port_labels.PORT_TARGET_NAME, np.zeros(2))
+            with self.assertRaises(ValueError):
+                port_labels.load_port_target(ep)
+
+    def test_override_replaces_target_and_forces_valid(self) -> None:
+        # A non-seating stall: TCP never reaches the port, but port_target.npy
+        # supplies the true target and the episode is valid despite no insertion.
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            # Poses stall 5 cm short of the port on x.
+            poses = np.zeros((8, 7))
+            poses[:, 6] = 1.0
+            poses[:, 0] = np.linspace(0.0, 0.15, 8)  # ends at x=0.15
+            ep = _make_episode(root, "ep_dagger", poses)
+            port = np.array([0.20, 0.0, 0.0])  # true port 5 cm beyond the stall
+            np.save(pathlib.Path(ep) / port_labels.PORT_TARGET_NAME, port)
+            # A DROP_SCORE / no-insertion log row would normally be invalid...
+            _write_log(root, [("ep_dagger", "", "", "DROP_SCORE")])
+            ls = port_labels.build_labels([ep], aux_dim=3, aux_frame="tcp")
+            self.assertTrue(ls.valid.all())  # override forces validity
+            # Target is the stored port, NOT robust_terminal (which would be 0.15).
+            np.testing.assert_allclose(ls.episodes[0].target_position, port, atol=1e-9)
+            # Terminal-frame label = true-port offset in TCP frame (identity quat).
+            np.testing.assert_allclose(ls.offsets[-1], [0.05, 0.0, 0.0], atol=1e-6)
+
+    def test_hindsight_path_unchanged_without_override(self) -> None:
+        # Regression guard: absent port_target.npy -> byte-identical legacy target.
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            poses = _descend_poses(12, np.array([0.1, 0.0, 0.1]))
+            ep = _make_episode(root, "ep_h", poses)
+            _write_log(root, [("ep_h", "92.0", "1", "KEEP")])
+            ls = port_labels.build_labels([ep], aux_dim=3, aux_frame="tcp")
+            tgt, _ = port_labels.port_offset.robust_terminal(poses)
+            np.testing.assert_allclose(ls.episodes[0].target_position, tgt, atol=1e-9)
+
+
 if __name__ == "__main__":
     unittest.main()

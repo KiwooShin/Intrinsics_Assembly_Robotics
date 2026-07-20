@@ -63,6 +63,12 @@ CAMPAIGN_LOG_NAME: str = "campaign_log.csv"
 # skipped": such rows re-affirm an existing episode and carry no fresh verdict,
 # so they are ignored when reducing duplicate rows to the effective status.
 SKIP_STATUS: str = "SKIP_EXISTS"
+# Optional per-episode override file written by ``dagger_relabel.py``: the TRUE
+# port entrance position ``[x, y, z]`` in base_link. When present it replaces the
+# hindsight ``robust_terminal`` target and forces the episode valid -- the
+# privileged-DAgger path (design_port_aux_head.md section 1.2). Absent for the
+# 77 hindsight episodes, so their behavior is byte-identical.
+PORT_TARGET_NAME: str = "port_target.npy"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -280,6 +286,33 @@ def load_episode_poses(episode_dir: str | pathlib.Path) -> np.ndarray:
     return poses
 
 
+def load_port_target(episode_dir: str | pathlib.Path) -> np.ndarray | None:
+    """Load a stored true-port target ``[x, y, z]`` (base_link), or None.
+
+    Reads the optional :data:`PORT_TARGET_NAME` written by ``dagger_relabel.py``
+    for privileged-DAgger episodes. Absent for hindsight episodes (returns None,
+    preserving the legacy ``robust_terminal`` path).
+
+    Args:
+        episode_dir: Episode directory possibly holding :data:`PORT_TARGET_NAME`.
+
+    Returns:
+        The float64 length-3 target position, or None when the file is absent.
+
+    Raises:
+        ValueError: If the file exists but is not a length-3 vector.
+    """
+    path = pathlib.Path(episode_dir) / PORT_TARGET_NAME
+    if not path.exists():
+        return None
+    target = np.load(path).astype(np.float64).reshape(-1)
+    if target.shape[0] != 3:
+        raise ValueError(
+            f"{path}: expected a length-3 port target, got shape {target.shape}"
+        )
+    return target
+
+
 def build_episode_label(
     episode_dir: str,
     status_map: dict[str, EpisodeStatus],
@@ -320,16 +353,26 @@ def build_episode_label(
     poses = load_episode_poses(episode_dir)
     n = poses.shape[0]
     basename = pathlib.Path(episode_dir).name
-    st = status_map.get(basename)
-    if st is None:
-        _LOG.warning(
-            "episode %s has no campaign_log row; marking labels invalid.", basename
-        )
-    valid = bool(st.valid) if st is not None else False
 
-    target_pos, target_quat = port_offset.robust_terminal(
-        poses, terminal_frames=terminal_frames
-    )
+    # Privileged-DAgger override: a stored TRUE port target (base_link) replaces
+    # the hindsight terminal-TCP target and marks the episode valid, because the
+    # deploy policy STALLS short of the port (its terminal TCP is NOT the port).
+    # See dagger_relabel.py / design_port_aux_head.md section 1.2.
+    stored_target = load_port_target(episode_dir)
+    if stored_target is not None:
+        target_pos = stored_target
+        target_quat = poses[-1, 3:].copy()
+        valid = True
+    else:
+        st = status_map.get(basename)
+        if st is None:
+            _LOG.warning(
+                "episode %s has no campaign_log row; marking labels invalid.", basename
+            )
+        valid = bool(st.valid) if st is not None else False
+        target_pos, target_quat = port_offset.robust_terminal(
+            poses, terminal_frames=terminal_frames
+        )
     offsets = port_offset.per_frame_tcp_offsets(poses, target_pos, frame=aux_frame)
     if aux_dim == 6:
         axis_base = port_offset.base_approach_axis(poses, axis_frames=axis_frames)

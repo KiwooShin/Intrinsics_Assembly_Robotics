@@ -249,14 +249,26 @@ class DeployACT(Policy):
             and self._guarded_config is not None
             and self._guarded_config.use_aux_bearing
         )
+        # Scripted spiral-search insertion primitive (AIC_SEARCH): a model-free
+        # bounded spiral/wiggle under a force-push that runs standalone once the
+        # stall latches (INSERTION_PLAN.md v2 point 5). No checkpoint -- the
+        # GuardedDescentController builds the SearchDescent from the config. It takes
+        # PRECEDENCE over the learned specialist when both are set (see below), so we
+        # skip loading the specialist checkpoint in that case.
+        self._search_enabled = bool(
+            self._guarded_config is not None and self._guarded_config.search_enabled
+        )
         # Learned insertion specialist (AIC_SPECIALIST): a SEPARATE checkpoint that
         # takes over from the scripted guarded descent once the stall latches
         # (INSERTION_PLAN.md change #2). Loaded once here, same lifecycle as the
         # main ckpt; only when the specialist is enabled (default OFF -> None, no
         # load, byte-identical). The specialist is K=8, state_dim=13 (pose7+wrench6),
-        # NO aux head. Path via AIC_SPECIALIST_CKPT (mirrors AIC_CKPT).
+        # NO aux head. Path via AIC_SPECIALIST_CKPT (mirrors AIC_CKPT). Suppressed
+        # when AIC_SEARCH wins precedence (no wasted checkpoint load).
         self._specialist_enabled = bool(
-            self._guarded_config is not None and self._guarded_config.specialist_enabled
+            self._guarded_config is not None
+            and self._guarded_config.specialist_enabled
+            and not self._search_enabled
         )
         self._spec_model: _Policy | None = None
         specialist_banner = "OFF"
@@ -284,6 +296,17 @@ class DeployACT(Policy):
                 f"state_dim={self._spec_state_dim}, exec_steps={gc.specialist_exec_steps}, "
                 f"dt={gc.specialist_dt:g}s, travel_cap={gc.specialist_travel_cap*1e3:g}mm, "
                 f"max_steps={gc.specialist_max_steps or 'unlimited'})"
+            )
+        search_banner = "OFF"
+        if self._search_enabled:
+            gc = self._guarded_config
+            search_banner = (
+                f"ON (radius_max={gc.search_radius_max*1e3:g}mm, turns={gc.search_turns:g}, "
+                f"z_step={gc.search_z_step*1e3:g}mm, omega={gc.search_omega:g}rad, "
+                f"engage_force={gc.search_engage_force:g}N, "
+                f"travel_cap={gc.search_travel_cap*1e3:g}mm, "
+                f"max_steps={gc.search_max_steps or 'unlimited'}, "
+                f"yaw_amp={gc.search_yaw_amp:g}rad) [precedence over specialist]"
             )
         guarded_banner = "OFF"
         if self._guarded_config is not None:
@@ -317,7 +340,7 @@ class DeployACT(Policy):
             f"on {self.device}; "
             f"MODE_POSITION receding horizon exec_steps={self.exec_steps} substeps={SUBSTEPS}; "
             f"temporal_ensembling={ensemble_banner}; guarded_descent={guarded_banner}; "
-            f"specialist={specialist_banner}"
+            f"specialist={specialist_banner}; search={search_banner}"
         )
 
     def _img(self, raw):

@@ -90,6 +90,23 @@ DEFAULT_SPECIALIST_MAX_STEPS: int = 0  # cap on integrated chunk steps (0 = unli
 DEFAULT_SPECIALIST_EXEC_STEPS: int = 4  # chunk steps integrated per descent cycle.
 DEFAULT_SPECIALIST_DT: float = 0.275  # s training frame period for velocity integration.
 
+# --- Scripted spiral-search insertion primitive (``AIC_SEARCH``) defaults. Once
+# the approach stalls at the port mouth, a straight push jams on the rim
+# (lateral/angular misalignment); the model-free fix (InsertionNet arXiv:2104.14223;
+# "From Reach to Insert" arXiv:2605.04649) is a bounded Archimedean spiral/wiggle
+# in the plane orthogonal to the approach axis under a downward force-push -- the
+# lateral search finds the hole a straight push misses. Fully deploy-legal: uses
+# only the current TCP pose + wrist wrench + the stall anchor (NO port TF). All
+# overridable via ``AIC_SEARCH_*``. ---
+DEFAULT_SEARCH_RADIUS: float = 0.004  # m; max lateral spiral radius (~port half-width).
+DEFAULT_SEARCH_TURNS: float = 3.0  # Archimedean turns to grow the radius 0 -> max.
+DEFAULT_SEARCH_Z_STEP: float = 0.0008  # m; downward push along the axis per cycle.
+DEFAULT_SEARCH_ENGAGE_FORCE: float = 4.0  # N; |F-baseline| at/above which the spiral grows.
+DEFAULT_SEARCH_TRAVEL_CAP: float = 0.06  # m; max total Z push (search depth) before holding.
+DEFAULT_SEARCH_MAX_STEPS: int = 0  # cap on push steps (0 = unlimited).
+DEFAULT_SEARCH_YAW_AMP: float = 0.0  # rad; optional tiny yaw-dither amplitude (0 = frozen).
+DEFAULT_SEARCH_OMEGA: float = 0.4  # rad; spiral angle advanced per in-contact cycle.
+
 # Per-trial guarded telemetry mirror written in the process CWD (the trial dir).
 DEFAULT_TRACE_FILENAME: str = "guarded_trace.log"
 
@@ -822,6 +839,335 @@ class SpecialistDescent:
         return targets
 
 
+def _lateral_basis(axis: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return two orthonormal vectors spanning the plane orthogonal to ``axis``.
+
+    Builds a stable right-handed basis ``(u, v)`` with ``u, v`` unit, mutually
+    orthogonal, and both orthogonal to the (unit) ``axis`` -- the lateral plane the
+    spiral search traces in. The world reference vector least aligned with ``axis``
+    seeds ``u`` (Gram-Schmidt), then ``v = axis x u``.
+
+    Args:
+        axis: Unit approach/descent axis ``(3,)``.
+
+    Returns:
+        The ``(u, v)`` pair of ``(3,)`` unit vectors orthogonal to ``axis``.
+    """
+    ref = np.array([1.0, 0.0, 0.0]) if abs(float(axis[0])) < 0.9 else np.array([0.0, 1.0, 0.0])
+    u = ref - axis * float(np.dot(ref, axis))
+    u = u / float(np.linalg.norm(u))
+    v = np.cross(axis, u)
+    v = v / float(np.linalg.norm(v))
+    return u, v
+
+
+class SearchDescent:
+    """Scripted spiral-search insertion primitive with contact and travel guards.
+
+    The model-free counterpart to :class:`SpecialistDescent` for the stall handoff
+    (INSERTION_PLAN.md v2 point 5, "cheap scripted spiral/wiggle insurance under
+    the push"). A decisive straight push jams on the port rim when the plug is
+    laterally/angularly misaligned; this primitive instead traces a bounded
+    Archimedean spiral in the plane *orthogonal to the approach axis* while pushing
+    down along that axis, so the lateral search finds the hole a straight push
+    misses (InsertionNet arXiv:2104.14223; "From Reach to Insert" arXiv:2605.04649).
+
+    Geometry, anchored at the *fixed* stall pose (never re-anchored to the measured
+    pose -- that is exactly the stall attractor), with ``axis`` the estimated
+    insertion direction and ``(u, v)`` an orthonormal basis of its orthogonal
+    plane::
+
+        theta(step)  = omega * spiral_steps       # advances only while in contact
+        radius(step) = min(a * theta, radius_max)  # a = radius_max / (2*pi*turns)
+        lateral      = radius * (cos(theta) * u + sin(theta) * v)   # _|_ axis
+        z_travel     = z_step * steps              # bounded by travel_cap
+        position     = anchor + axis * z_travel + lateral
+
+    The spiral grows to ``radius_max`` over ``turns`` turns, then keeps circling at
+    the rim (radius clamped) while the push continues. The orientation is held at
+    the anchor unless a tiny ``yaw_amp`` dither about the axis is requested. Three
+    guards freeze travel, mirroring :class:`GuardedDescent`:
+
+    * **Hard wrench back-off** -- if ``|F - baseline|`` exceeds
+      ``contact_force_threshold`` (the hard 12 N), retreat one push step and HOLD
+      (do not ram). Moderate contact below this threshold is *expected* during
+      search and is tolerated.
+    * **Engage gate** -- the lateral spiral only *grows* while in contact
+      (``|F - baseline| >= search_engage_force``); in free space the primitive just
+      pushes straight down, and once it drops into the hole (contact falls away) it
+      stops searching and keeps pushing in.
+    * **Travel cap / max steps** -- the total Z push is capped at ``travel_cap`` and
+      the step count at ``max_steps``; hitting either holds.
+
+    Duck-types the attributes ``GuardedDescentController`` reads off a descent
+    (:attr:`steps`, :attr:`travel`, :attr:`contacts`, :attr:`last_force_delta`,
+    :attr:`phase`), so the controller's result assembly is shared unchanged.
+    """
+
+    def __init__(
+        self,
+        axis: np.ndarray,
+        anchor_position: np.ndarray,
+        anchor_quaternion: np.ndarray,
+        baseline_force: np.ndarray | None,
+        radius_max: float = DEFAULT_SEARCH_RADIUS,
+        turns: float = DEFAULT_SEARCH_TURNS,
+        z_step: float = DEFAULT_SEARCH_Z_STEP,
+        omega: float = DEFAULT_SEARCH_OMEGA,
+        engage_force: float = DEFAULT_SEARCH_ENGAGE_FORCE,
+        travel_cap: float = DEFAULT_SEARCH_TRAVEL_CAP,
+        max_steps: int = DEFAULT_SEARCH_MAX_STEPS,
+        yaw_amp: float = DEFAULT_SEARCH_YAW_AMP,
+        contact_force_threshold: float = DEFAULT_CONTACT_FORCE_THRESHOLD,
+    ) -> None:
+        """Initialize the spiral search from the handoff pose and estimated axis.
+
+        Args:
+            axis: Estimated insertion direction ``(3,)`` (need not be unit; it is
+                normalized). The push accumulates along it and the spiral traces
+                its orthogonal plane. Must have non-negligible norm.
+            anchor_position: TCP position ``(3,)`` at handoff (m); the fixed origin
+                the spiral + push accumulate from.
+            anchor_quaternion: TCP orientation ``(4,)`` ``[x, y, z, w]`` at handoff;
+                held constant (or yaw-dithered about the axis when ``yaw_amp`` != 0).
+            baseline_force: Approach-phase mean force ``(3,)`` (N) for the contact
+                guard + engage gate, or None to disable both.
+            radius_max: Maximum lateral spiral radius (m). Must be positive.
+            turns: Archimedean turns to grow the radius from 0 to ``radius_max``.
+                Must be positive.
+            z_step: Downward push along the axis per cycle (m). Must be positive.
+            omega: Spiral angle advanced per in-contact cycle (rad). Must be
+                positive.
+            engage_force: ``|F - baseline|`` (N) at/above which the spiral grows.
+                Must be non-negative.
+            travel_cap: Maximum total Z push (m) before holding. Must be positive.
+            max_steps: Cap on push steps (0 = unlimited). Must be >= 0.
+            yaw_amp: Amplitude (rad) of an optional yaw dither about the axis
+                (0 = orientation frozen at the anchor). Must be finite.
+            contact_force_threshold: Baseline-relative ``|F - baseline|`` (N) that
+                triggers the hard one-step back-off. Must be non-negative.
+
+        Raises:
+            ValueError: If any argument is out of range or malformed.
+        """
+        axis_arr = np.asarray(axis, dtype=np.float64).reshape(-1)
+        if axis_arr.shape != (3,):
+            raise ValueError(f"axis must have shape (3,), got {axis_arr.shape}")
+        axis_norm = float(np.linalg.norm(axis_arr))
+        if not math.isfinite(axis_norm) or axis_norm < _AXIS_MIN_NORM:
+            raise ValueError(f"axis must have non-negligible norm, got {axis!r}")
+        pos = np.asarray(anchor_position, dtype=np.float64).reshape(-1)
+        if pos.shape != (3,):
+            raise ValueError(f"anchor_position must have shape (3,), got {pos.shape}")
+        quat = np.asarray(anchor_quaternion, dtype=np.float64).reshape(-1)
+        if quat.shape != (4,):
+            raise ValueError(f"anchor_quaternion must have shape (4,), got {quat.shape}")
+        if float(np.linalg.norm(quat)) < _QUAT_MIN_NORM:
+            raise ValueError("anchor_quaternion has near-zero norm")
+        if not math.isfinite(radius_max) or radius_max <= 0.0:
+            raise ValueError(f"radius_max must be a positive float, got {radius_max!r}")
+        if not math.isfinite(turns) or turns <= 0.0:
+            raise ValueError(f"turns must be a positive float, got {turns!r}")
+        if not math.isfinite(z_step) or z_step <= 0.0:
+            raise ValueError(f"z_step must be a positive float, got {z_step!r}")
+        if not math.isfinite(omega) or omega <= 0.0:
+            raise ValueError(f"omega must be a positive float, got {omega!r}")
+        if not math.isfinite(engage_force) or engage_force < 0.0:
+            raise ValueError(f"engage_force must be a non-negative float, got {engage_force!r}")
+        if not math.isfinite(travel_cap) or travel_cap <= 0.0:
+            raise ValueError(f"travel_cap must be a positive float, got {travel_cap!r}")
+        if max_steps < 0:
+            raise ValueError(f"max_steps must be >= 0, got {max_steps}")
+        if not math.isfinite(yaw_amp):
+            raise ValueError(f"yaw_amp must be finite, got {yaw_amp!r}")
+        if not math.isfinite(contact_force_threshold) or contact_force_threshold < 0.0:
+            raise ValueError(
+                f"contact_force_threshold must be a non-negative float, "
+                f"got {contact_force_threshold!r}"
+            )
+
+        self.axis = axis_arr / axis_norm
+        self.anchor_position = pos
+        self.anchor_quaternion = quat
+        self.baseline_force = (
+            np.asarray(baseline_force, dtype=np.float64).reshape(-1)
+            if baseline_force is not None
+            else None
+        )
+        if self.baseline_force is not None and self.baseline_force.shape != (3,):
+            raise ValueError(
+                f"baseline_force must have shape (3,), got {self.baseline_force.shape}"
+            )
+        self.radius_max = float(radius_max)
+        self.turns = float(turns)
+        self.z_step = float(z_step)
+        self.search_omega = float(omega)
+        self.search_engage_force = float(engage_force)
+        self.travel_cap = float(travel_cap)
+        self.max_steps = int(max_steps)
+        self.search_yaw_amp = float(yaw_amp)
+        self.contact_force_threshold = float(contact_force_threshold)
+
+        # Archimedean coefficient r = a * theta; a chosen so r = radius_max at
+        # theta = 2*pi*turns.
+        self._a = self.radius_max / (2.0 * math.pi * self.turns)
+        self._u, self._v = _lateral_basis(self.axis)
+
+        self.steps = 0  # push steps (drives z_travel = z_step * steps).
+        self.theta = 0.0  # accumulated spiral angle (grows only while in contact).
+        self.phase = GuardedPhase.DESCEND
+        self.contacts = 0
+        self.last_force_delta = 0.0
+
+    @property
+    def travel(self) -> float:
+        """Total commanded Z push from the anchor along the axis, in metres."""
+        return self.z_step * self.steps
+
+    @property
+    def radius(self) -> float:
+        """Current lateral spiral radius (m), clamped at ``radius_max``."""
+        return min(self._a * self.theta, self.radius_max)
+
+    def _force_delta(self, force: np.ndarray | None) -> float:
+        """Return ``|F - baseline|`` (N), or 0.0 when the contact guard is inactive.
+
+        Args:
+            force: Current wrist force ``(3,)`` (N), or None.
+
+        Returns:
+            The baseline-relative force magnitude, or 0.0 when either the force or
+            the baseline is unavailable.
+        """
+        if force is None or self.baseline_force is None:
+            return 0.0
+        f = np.asarray(force, dtype=np.float64).reshape(-1)
+        if f.shape != (3,):
+            raise ValueError(f"force must have shape (3,), got {f.shape}")
+        return float(np.linalg.norm(f - self.baseline_force))
+
+    def target(self) -> np.ndarray:
+        """Return the absolute pose target for the current spiral + push state.
+
+        Returns:
+            The ``(7,)`` pose target ``[x, y, z, qx, qy, qz, qw]``: the anchor plus
+            the accumulated axial push plus the lateral spiral offset, with the
+            anchor orientation (optionally yaw-dithered about the axis).
+        """
+        r = self.radius
+        lateral = r * (math.cos(self.theta) * self._u + math.sin(self.theta) * self._v)
+        pos = self.anchor_position + self.axis * (self.z_step * self.steps) + lateral
+        out = np.empty(7, dtype=np.float64)
+        out[:3] = pos
+        if self.search_yaw_amp != 0.0:
+            angle = self.search_yaw_amp * math.sin(self.theta)
+            dq = pose_integration.quaternion_from_angular_velocity(self.axis * angle, 1.0)
+            quat = pose_integration.quaternion_multiply(dq, self.anchor_quaternion)
+            out[3:] = quat / float(np.linalg.norm(quat))
+        else:
+            out[3:] = self.anchor_quaternion
+        return out
+
+    def advance(
+        self,
+        force: np.ndarray | None,
+        substeps: int = 1,
+        logs: list[str] | None = None,
+        t: float = 0.0,
+    ) -> np.ndarray:
+        """Advance one spiral-search cycle and return the sub-stepped pose targets.
+
+        Order of guards each cycle: while already holding, re-command the held
+        target; otherwise test the hard wrench back-off (retreat one push step +
+        HOLD on a spike above ``contact_force_threshold``), then the ``max_steps``
+        cap, then the ``travel_cap`` on the Z push, else take one push step (always)
+        and advance the spiral angle (only while in contact). The new target is
+        linearly interpolated from the previous one over ``substeps`` sub-poses to
+        match ``DeployACT``'s command cadence.
+
+        Args:
+            force: Current wrist force ``(3,)`` (N) for the contact guard, or None.
+            substeps: Sub-poses emitted per cycle (matches DeployACT SUBSTEPS). Must
+                be >= 1.
+            logs: Optional mutable log list; ``[search]`` lines are appended.
+            t: Elapsed time (s), for log lines only.
+
+        Returns:
+            An ``(substeps, 7)`` array of absolute pose targets to command.
+
+        Raises:
+            ValueError: If ``substeps`` < 1 or ``force`` has the wrong shape.
+        """
+        if substeps < 1:
+            raise ValueError(f"substeps must be >= 1, got {substeps}")
+        force_vec = None if force is None else np.asarray(force, dtype=np.float64).reshape(-1)
+        self.last_force_delta = self._force_delta(force_vec)
+        prev_target = self.target()
+
+        if self.phase == GuardedPhase.HOLD:
+            return _interpolate_targets(prev_target, prev_target, substeps)
+
+        # Hard wrench back-off (force safety preserved from the scripted descent):
+        # moderate contact is tolerated, only a spike above the hard threshold backs
+        # off one push step and holds.
+        if (
+            self.baseline_force is not None
+            and self.last_force_delta > self.contact_force_threshold
+        ):
+            self.steps = max(0, self.steps - 1)
+            self.contacts += 1
+            self.phase = GuardedPhase.HOLD
+            new_target = self.target()
+            if logs is not None:
+                logs.append(
+                    f"[search] phase -> HOLD at t={t:.1f}s: contact "
+                    f"(|F-baseline|={self.last_force_delta:.2f}N > "
+                    f"{self.contact_force_threshold:.1f}N), backing off one step; "
+                    f"steps={self.steps} z_travel={self.travel * 1e3:.1f}mm "
+                    f"radius={self.radius * 1e3:.2f}mm"
+                )
+            return _interpolate_targets(prev_target, new_target, substeps)
+
+        # Max-steps safety bound.
+        if self.max_steps > 0 and self.steps >= self.max_steps:
+            self.phase = GuardedPhase.HOLD
+            if logs is not None:
+                logs.append(
+                    f"[search] phase -> HOLD at t={t:.1f}s: max_steps "
+                    f"{self.max_steps} reached; z_travel={self.travel * 1e3:.1f}mm"
+                )
+            return _interpolate_targets(prev_target, prev_target, substeps)
+
+        # Travel cap on the total Z push.
+        if self.z_step * (self.steps + 1) > self.travel_cap:
+            self.phase = GuardedPhase.HOLD
+            if logs is not None:
+                logs.append(
+                    f"[search] phase -> HOLD at t={t:.1f}s: travel cap "
+                    f"{self.travel_cap * 1e3:.0f}mm reached; steps={self.steps} "
+                    f"radius={self.radius * 1e3:.2f}mm"
+                )
+            return _interpolate_targets(prev_target, prev_target, substeps)
+
+        # Push one step (always); grow the lateral spiral only while in contact.
+        self.steps += 1
+        in_contact = (
+            self.baseline_force is not None
+            and self.last_force_delta >= self.search_engage_force
+        )
+        if in_contact:
+            self.theta += self.search_omega
+        new_target = self.target()
+        if logs is not None:
+            logs.append(
+                f"[search] t={t:.1f}s step={self.steps} theta={self.theta:.2f}rad "
+                f"radius={self.radius * 1e3:.2f}mm z_travel={self.travel * 1e3:.1f}mm "
+                f"|F-baseline|={self.last_force_delta:.2f}N contact={int(in_contact)} "
+                f"contacts={self.contacts}"
+            )
+        return _interpolate_targets(prev_target, new_target, substeps)
+
+
 @dataclasses.dataclass(frozen=True)
 class GuardedDescentConfig:
     """Immutable configuration for the guarded-descent probe.
@@ -875,6 +1221,25 @@ class GuardedDescentConfig:
             cycle (receding horizon) before re-querying the specialist.
         specialist_dt: Training frame period (s) used to integrate the specialist's
             TCP-velocity chunk into pose targets (matches ``DeployACT.DT_FRAME``).
+        search_enabled: Whether the scripted spiral-search primitive replaces the
+            straight scripted descent once the stall latches (``AIC_SEARCH=1``).
+            When False the descent is byte-identical to today. ``enabled`` is forced
+            True whenever this is set, since the search still needs the
+            stall-detection machinery to hand off. Takes PRECEDENCE over the learned
+            specialist when both are set (search is the self-contained, model-free
+            standalone primitive).
+        search_radius_max: Maximum lateral spiral radius (m) (~port half-width).
+        search_turns: Archimedean turns to grow the radius from 0 to the max.
+        search_z_step: Downward push along the axis per cycle (m).
+        search_omega: Spiral angle advanced per in-contact cycle (rad).
+        search_engage_force: ``|F - baseline|`` (N) at/above which the spiral grows
+            (moderate search contact is tolerated; the hard back-off stays at
+            ``contact_force_threshold``).
+        search_travel_cap: Maximum total Z push (m) -- the search depth -- before
+            holding.
+        search_max_steps: Cap on push steps before holding (0 = unlimited).
+        search_yaw_amp: Amplitude (rad) of an optional yaw dither about the axis
+            (0 = orientation frozen at the anchor).
     """
 
     enabled: bool = False
@@ -903,6 +1268,15 @@ class GuardedDescentConfig:
     specialist_max_steps: int = DEFAULT_SPECIALIST_MAX_STEPS
     specialist_exec_steps: int = DEFAULT_SPECIALIST_EXEC_STEPS
     specialist_dt: float = DEFAULT_SPECIALIST_DT
+    search_enabled: bool = False
+    search_radius_max: float = DEFAULT_SEARCH_RADIUS
+    search_turns: float = DEFAULT_SEARCH_TURNS
+    search_z_step: float = DEFAULT_SEARCH_Z_STEP
+    search_omega: float = DEFAULT_SEARCH_OMEGA
+    search_engage_force: float = DEFAULT_SEARCH_ENGAGE_FORCE
+    search_travel_cap: float = DEFAULT_SEARCH_TRAVEL_CAP
+    search_max_steps: int = DEFAULT_SEARCH_MAX_STEPS
+    search_yaw_amp: float = DEFAULT_SEARCH_YAW_AMP
 
     def stiffness(self) -> list[float] | None:
         """Return the descent stiffness list, or None to keep the caller default.
@@ -938,23 +1312,36 @@ class GuardedDescentConfig:
         ``AIC_SPECIALIST_TRAVEL_CAP``, ``AIC_SPECIALIST_MAX_STEPS``,
         ``AIC_SPECIALIST_EXEC_STEPS``, ``AIC_SPECIALIST_DT`` (the specialist
         checkpoint path itself is read by ``DeployACT`` via ``AIC_SPECIALIST_CKPT``).
+        Scripted spiral-search primitive (INSERTION_PLAN.md v2 point 5):
+        ``AIC_SEARCH`` (``"1"`` replaces the scripted descent with the model-free
+        spiral search AND forces ``enabled`` so the stall machinery runs; takes
+        PRECEDENCE over ``AIC_SPECIALIST`` when both are set), ``AIC_SEARCH_RADIUS``,
+        ``AIC_SEARCH_TURNS``, ``AIC_SEARCH_Z_STEP``, ``AIC_SEARCH_OMEGA``,
+        ``AIC_SEARCH_ENGAGE_FORCE``, ``AIC_SEARCH_TRAVEL_CAP``,
+        ``AIC_SEARCH_MAX_STEPS``, ``AIC_SEARCH_YAW_AMP``.
 
         Args:
             env: Environment mapping (e.g. ``os.environ``).
 
         Returns:
-            The parsed :class:`GuardedDescentConfig`. When neither ``AIC_GUARDED``
-            nor ``AIC_SPECIALIST`` is exactly ``"1"`` the returned config has
-            ``enabled=False`` and default thresholds.
+            The parsed :class:`GuardedDescentConfig`. When none of ``AIC_GUARDED``,
+            ``AIC_SPECIALIST``, or ``AIC_SEARCH`` is exactly ``"1"`` the returned
+            config has ``enabled=False`` and default thresholds.
 
         Raises:
             ValueError: If a provided override cannot be parsed as its numeric
                 type.
         """
         specialist_enabled = env.get("AIC_SPECIALIST", "0").strip() == "1"
-        # The specialist reuses the stall-detection/handoff machinery, so enabling
-        # it also enables the guarded controller even if AIC_GUARDED is unset.
-        enabled = env.get("AIC_GUARDED", "0").strip() == "1" or specialist_enabled
+        search_enabled = env.get("AIC_SEARCH", "0").strip() == "1"
+        # The specialist / spiral search reuse the stall-detection/handoff
+        # machinery, so enabling either also enables the guarded controller even
+        # when AIC_GUARDED is unset.
+        enabled = (
+            env.get("AIC_GUARDED", "0").strip() == "1"
+            or specialist_enabled
+            or search_enabled
+        )
 
         def _f(key: str, default: float) -> float:
             raw = env.get(key)
@@ -1005,6 +1392,15 @@ class GuardedDescentConfig:
                 "AIC_SPECIALIST_EXEC_STEPS", DEFAULT_SPECIALIST_EXEC_STEPS
             ),
             specialist_dt=_f("AIC_SPECIALIST_DT", DEFAULT_SPECIALIST_DT),
+            search_enabled=search_enabled,
+            search_radius_max=_f("AIC_SEARCH_RADIUS", DEFAULT_SEARCH_RADIUS),
+            search_turns=_f("AIC_SEARCH_TURNS", DEFAULT_SEARCH_TURNS),
+            search_z_step=_f("AIC_SEARCH_Z_STEP", DEFAULT_SEARCH_Z_STEP),
+            search_omega=_f("AIC_SEARCH_OMEGA", DEFAULT_SEARCH_OMEGA),
+            search_engage_force=_f("AIC_SEARCH_ENGAGE_FORCE", DEFAULT_SEARCH_ENGAGE_FORCE),
+            search_travel_cap=_f("AIC_SEARCH_TRAVEL_CAP", DEFAULT_SEARCH_TRAVEL_CAP),
+            search_max_steps=_i("AIC_SEARCH_MAX_STEPS", DEFAULT_SEARCH_MAX_STEPS),
+            search_yaw_amp=_f("AIC_SEARCH_YAW_AMP", DEFAULT_SEARCH_YAW_AMP),
         )
 
 
@@ -1087,7 +1483,7 @@ class GuardedDescentController:
             window=config.axis_window,
             min_displacement=config.axis_min_displacement,
         )
-        self.descent: GuardedDescent | SpecialistDescent | None = None
+        self.descent: GuardedDescent | SpecialistDescent | SearchDescent | None = None
         self.phase = GuardedPhase.APPROACH
         self._last_position: np.ndarray | None = None
         self._last_time: float | None = None
@@ -1118,6 +1514,16 @@ class GuardedDescentController:
     def _specialist_active(self) -> bool:
         """Whether the learned insertion specialist drives the descent at handoff."""
         return self.specialist_provider is not None and self.config.specialist_enabled
+
+    @property
+    def _search_active(self) -> bool:
+        """Whether the scripted spiral search drives the descent at handoff.
+
+        The spiral search is model-free (no provider needed), so this is gated on
+        the config flag alone. It takes precedence over the learned specialist when
+        both are enabled.
+        """
+        return self.config.search_enabled
 
     @property
     def active(self) -> bool:
@@ -1220,6 +1626,13 @@ class GuardedDescentController:
             # Learned specialist: it emits the (already sub-stepped) integrated
             # pose targets directly and manages its own HOLD transitions/logs.
             targets = self.descent.advance(pos, quat, force_vec, substeps, logs, t)
+            if self.descent.phase == GuardedPhase.HOLD:
+                self.phase = GuardedPhase.HOLD
+            return self._result(targets, tuple(logs), triggered_this_cycle)
+        if isinstance(self.descent, SearchDescent):
+            # Scripted spiral search: it emits the (already sub-stepped) spiral +
+            # push pose targets directly and manages its own HOLD transitions/logs.
+            targets = self.descent.advance(force_vec, substeps, logs, t)
             if self.descent.phase == GuardedPhase.HOLD:
                 self.phase = GuardedPhase.HOLD
             return self._result(targets, tuple(logs), triggered_this_cycle)
@@ -1357,6 +1770,10 @@ class GuardedDescentController:
             True when a guarded descent was engaged; False to keep the learned
             path (no usable bearing).
         """
+        if self._search_active:
+            # Scripted spiral search replaces the straight descent (takes precedence
+            # over the learned specialist when both are enabled).
+            return self._engage_search(t, pos, quat, baseline, logs)
         if self._specialist_active:
             # Learned insertion specialist replaces the scripted descent entirely.
             return self._engage_specialist(t, pos, quat, baseline, logs)
@@ -1486,6 +1903,81 @@ class GuardedDescentController:
             f"dt={self.config.specialist_dt:g}s travel_cap="
             f"{self.config.specialist_travel_cap*1e3:.0f}mm max_steps={max_steps_desc} "
             f"force_thr={self.config.contact_force_threshold:.1f}N"
+        )
+        return True
+
+    def _engage_search(
+        self,
+        t: float,
+        pos: np.ndarray,
+        quat: np.ndarray,
+        baseline: np.ndarray | None,
+        logs: list[str],
+    ) -> bool:
+        """Build the :class:`SearchDescent` at the stall handoff.
+
+        Anchors the model-free spiral search at the current (stall) pose, using the
+        :class:`ApproachAxisEstimator` motion axis as the push direction (and the
+        seed for the orthogonal spiral plane) and wiring the approach-phase wrench
+        baseline into its contact guard + engage gate. Like the scripted descent it
+        needs a motion axis: when none can be estimated it stays on the learned path
+        (returns False) rather than searching in an unknown direction.
+
+        Args:
+            t: Elapsed time (s).
+            pos: Anchor TCP position ``(3,)`` (m).
+            quat: Anchor TCP orientation ``(4,)`` ``[x, y, z, w]``.
+            baseline: Approach-phase mean force ``(3,)`` (N), or None.
+            logs: Mutable log-line list appended to in place.
+
+        Returns:
+            True when the spiral search engaged; False (staying on the learned path)
+            when no approach axis is available.
+        """
+        axis = self.axis_estimator.estimate()
+        if axis is None:
+            if not self._axis_unavailable_logged:
+                self._axis_unavailable_logged = True
+                logs.append(
+                    f"[search] stall detected at t={t:.1f}s but approach axis "
+                    f"could not be estimated ({len(self.axis_estimator)} samples); "
+                    f"staying on the learned path"
+                )
+            return False
+        self.descent = SearchDescent(
+            axis=axis,
+            anchor_position=pos,
+            anchor_quaternion=quat,
+            baseline_force=baseline,
+            radius_max=self.config.search_radius_max,
+            turns=self.config.search_turns,
+            z_step=self.config.search_z_step,
+            omega=self.config.search_omega,
+            engage_force=self.config.search_engage_force,
+            travel_cap=self.config.search_travel_cap,
+            max_steps=self.config.search_max_steps,
+            yaw_amp=self.config.search_yaw_amp,
+            contact_force_threshold=self.config.contact_force_threshold,
+        )
+        self.phase = GuardedPhase.DESCEND
+        self._bearing_source = "search"
+        baseline_norm = 0.0 if baseline is None else float(np.linalg.norm(baseline))
+        max_steps_desc = (
+            "unlimited" if self.config.search_max_steps == 0
+            else str(self.config.search_max_steps)
+        )
+        gc = self.config
+        logs.append(
+            f"[search] HANDOFF at t={t:.1f}s: stall detected, engaging scripted "
+            f"spiral search. "
+            f"axis=({axis[0]:+.3f},{axis[1]:+.3f},{axis[2]:+.3f}) "
+            f"anchor=({pos[0]:+.3f},{pos[1]:+.3f},{pos[2]:+.3f}) "
+            f"baseline|F|={baseline_norm:.2f}N radius_max={gc.search_radius_max*1e3:.1f}mm "
+            f"turns={gc.search_turns:g} z_step={gc.search_z_step*1e3:.2f}mm "
+            f"omega={gc.search_omega:g}rad engage_force={gc.search_engage_force:.1f}N "
+            f"travel_cap={gc.search_travel_cap*1e3:.0f}mm max_steps={max_steps_desc} "
+            f"yaw_amp={gc.search_yaw_amp:g}rad "
+            f"force_thr={gc.contact_force_threshold:.1f}N"
         )
         return True
 

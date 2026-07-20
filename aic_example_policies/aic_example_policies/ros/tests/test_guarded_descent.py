@@ -27,6 +27,14 @@ from aic_example_policies.ros import pose_integration
 from aic_example_policies.ros.guarded_descent import (
     DEFAULT_AUX_FIXED_TRAVEL,
     DEFAULT_CONTACT_FORCE_THRESHOLD,
+    DEFAULT_SEARCH_ENGAGE_FORCE,
+    DEFAULT_SEARCH_MAX_STEPS,
+    DEFAULT_SEARCH_OMEGA,
+    DEFAULT_SEARCH_RADIUS,
+    DEFAULT_SEARCH_TRAVEL_CAP,
+    DEFAULT_SEARCH_TURNS,
+    DEFAULT_SEARCH_YAW_AMP,
+    DEFAULT_SEARCH_Z_STEP,
     DEFAULT_SPECIALIST_DT,
     DEFAULT_SPECIALIST_EXEC_STEPS,
     DEFAULT_SPECIALIST_MAX_STEPS,
@@ -39,6 +47,7 @@ from aic_example_policies.ros.guarded_descent import (
     GuardedDescentController,
     GuardedPhase,
     GuardedTraceWriter,
+    SearchDescent,
     SpecialistDescent,
     StallDetector,
 )
@@ -1170,6 +1179,369 @@ class SpecialistSwitchTest(unittest.TestCase):
         self.assertTrue(ctrl.active)
         self.assertIsInstance(ctrl.descent, GuardedDescent)
         self.assertEqual(ctrl._bearing_source, "motion-axis")
+
+
+class SearchConfigTest(unittest.TestCase):
+    """Env parsing for the scripted spiral-search primitive (``AIC_SEARCH``)."""
+
+    def test_disabled_by_default(self) -> None:
+        """An empty environment leaves the spiral search off with defaults."""
+        cfg = GuardedDescentConfig.from_env({})
+        self.assertFalse(cfg.search_enabled)
+        self.assertFalse(cfg.enabled)
+        self.assertEqual(cfg.search_radius_max, DEFAULT_SEARCH_RADIUS)
+        self.assertEqual(cfg.search_turns, DEFAULT_SEARCH_TURNS)
+        self.assertEqual(cfg.search_z_step, DEFAULT_SEARCH_Z_STEP)
+        self.assertEqual(cfg.search_omega, DEFAULT_SEARCH_OMEGA)
+        self.assertEqual(cfg.search_engage_force, DEFAULT_SEARCH_ENGAGE_FORCE)
+        self.assertEqual(cfg.search_travel_cap, DEFAULT_SEARCH_TRAVEL_CAP)
+        self.assertEqual(cfg.search_max_steps, DEFAULT_SEARCH_MAX_STEPS)
+        self.assertEqual(cfg.search_yaw_amp, DEFAULT_SEARCH_YAW_AMP)
+
+    def test_search_flag_forces_enabled(self) -> None:
+        """`AIC_SEARCH=1` turns on the spiral search AND the controller."""
+        cfg = GuardedDescentConfig.from_env({"AIC_SEARCH": "1"})
+        self.assertTrue(cfg.search_enabled)
+        self.assertTrue(cfg.enabled)  # forced on so the stall machinery runs
+
+    def test_search_off_keeps_guarded_semantics(self) -> None:
+        """`AIC_SEARCH` unset/other values keep today's on/off behavior exactly."""
+        self.assertFalse(GuardedDescentConfig.from_env({"AIC_GUARDED": "1"}).search_enabled)
+        self.assertTrue(GuardedDescentConfig.from_env({"AIC_GUARDED": "1"}).enabled)
+        self.assertFalse(GuardedDescentConfig.from_env({"AIC_SEARCH": "0"}).enabled)
+        self.assertFalse(GuardedDescentConfig.from_env({"AIC_SEARCH": "yes"}).enabled)
+
+    def test_search_overrides_parse(self) -> None:
+        """All `AIC_SEARCH_*` numeric overrides parse into the config."""
+        cfg = GuardedDescentConfig.from_env(
+            {
+                "AIC_SEARCH": "1",
+                "AIC_SEARCH_RADIUS": "0.006",
+                "AIC_SEARCH_TURNS": "4",
+                "AIC_SEARCH_Z_STEP": "0.001",
+                "AIC_SEARCH_OMEGA": "0.5",
+                "AIC_SEARCH_ENGAGE_FORCE": "5.0",
+                "AIC_SEARCH_TRAVEL_CAP": "0.05",
+                "AIC_SEARCH_MAX_STEPS": "120",
+                "AIC_SEARCH_YAW_AMP": "0.02",
+            }
+        )
+        self.assertTrue(cfg.search_enabled)
+        self.assertEqual(cfg.search_radius_max, 0.006)
+        self.assertEqual(cfg.search_turns, 4.0)
+        self.assertEqual(cfg.search_z_step, 0.001)
+        self.assertEqual(cfg.search_omega, 0.5)
+        self.assertEqual(cfg.search_engage_force, 5.0)
+        self.assertEqual(cfg.search_travel_cap, 0.05)
+        self.assertEqual(cfg.search_max_steps, 120)
+        self.assertEqual(cfg.search_yaw_amp, 0.02)
+
+    def test_search_bad_override_raises(self) -> None:
+        """A non-numeric search override raises ValueError."""
+        with self.assertRaises(ValueError):
+            GuardedDescentConfig.from_env(
+                {"AIC_SEARCH": "1", "AIC_SEARCH_RADIUS": "wide"}
+            )
+        with self.assertRaises(ValueError):
+            GuardedDescentConfig.from_env(
+                {"AIC_SEARCH": "1", "AIC_SEARCH_MAX_STEPS": "lots"}
+            )
+
+    def test_search_and_specialist_both_enable_controller(self) -> None:
+        """Both flags set: both parsed on, controller enabled (precedence handled later)."""
+        cfg = GuardedDescentConfig.from_env({"AIC_SEARCH": "1", "AIC_SPECIALIST": "1"})
+        self.assertTrue(cfg.search_enabled)
+        self.assertTrue(cfg.specialist_enabled)
+        self.assertTrue(cfg.enabled)
+
+
+class SearchDescentTest(unittest.TestCase):
+    """Spiral geometry, engage gate, wrench back-off, and travel/step guards."""
+
+    ANCHOR = np.array([0.15, -0.05, 0.60])
+    QUAT = np.array([0.0, 0.0, 0.0, 1.0])
+
+    def _descent(self, **overrides: object) -> SearchDescent:
+        kwargs: dict[str, object] = dict(
+            axis=np.array([0.0, 0.0, -1.0]),
+            anchor_position=self.ANCHOR,
+            anchor_quaternion=self.QUAT,
+            baseline_force=np.array([0.0, 0.0, 0.0]),
+            radius_max=0.004,
+            turns=1.0,
+            z_step=0.0008,
+            omega=np.pi / 4.0,  # 8 in-contact cycles complete one turn
+            engage_force=4.0,
+            travel_cap=0.12,
+            max_steps=0,
+            yaw_amp=0.0,
+            contact_force_threshold=12.0,
+        )
+        kwargs.update(overrides)
+        return SearchDescent(**kwargs)  # type: ignore[arg-type]
+
+    def test_axis_is_normalized(self) -> None:
+        """A non-unit axis is normalized on construction."""
+        d = self._descent(axis=np.array([0.0, 0.0, -3.0]))
+        np.testing.assert_allclose(d.axis, [0.0, 0.0, -1.0])
+
+    def test_spiral_radius_grows_to_max_over_turns_and_clamps(self) -> None:
+        """Radius grows 0 -> max over ``turns`` while in contact and never exceeds."""
+        d = self._descent()  # turns=1, omega=pi/4 -> max at 8 in-contact cycles
+        contact = np.array([6.0, 0.0, 0.0])  # |F-baseline| = 6 N (engaged, < 12 N)
+        radii = []
+        for _ in range(16):
+            d.advance(force=contact, substeps=1)
+            radii.append(d.radius)
+        # Monotonic non-decreasing and bounded by radius_max throughout.
+        for a, b in zip(radii, radii[1:]):
+            self.assertLessEqual(a, b + 1e-12)
+        self.assertLessEqual(max(radii), 0.004 + 1e-12)
+        # Reaches (essentially) the max radius by ~8 cycles and stays there.
+        self.assertAlmostEqual(radii[7], 0.004, places=9)
+        self.assertAlmostEqual(radii[-1], 0.004, places=9)
+
+    def test_lateral_offset_orthogonal_to_axis(self) -> None:
+        """The spiral offset is axial push + a lateral part orthogonal to the axis."""
+        axis = np.array([1.0, 0.0, -1.0])
+        axis_u = axis / np.linalg.norm(axis)
+        d = self._descent(axis=axis)
+        contact = np.array([6.0, 0.0, 0.0])
+        for _ in range(6):
+            tgt = d.advance(force=contact, substeps=1)[-1]
+            offset = tgt[:3] - self.ANCHOR
+            # The axial component equals the pure Z push (no lateral leak into axis).
+            axial = float(np.dot(offset, axis_u))
+            self.assertAlmostEqual(axial, d.z_step * d.steps, places=9)
+            lateral = offset - axis_u * axial
+            self.assertAlmostEqual(float(np.dot(lateral, axis_u)), 0.0, places=9)
+            self.assertAlmostEqual(float(np.linalg.norm(lateral)), d.radius, places=9)
+
+    def test_z_accumulates_downward_within_cap_then_holds(self) -> None:
+        """The Z push accumulates downward, never exceeds travel_cap, then HOLDs."""
+        d = self._descent(z_step=0.001, travel_cap=0.005, radius_max=0.004)
+        contact = np.array([6.0, 0.0, 0.0])
+        zs = []
+        for _ in range(20):
+            tgt = d.advance(force=contact, substeps=1)[-1]
+            zs.append(tgt[2])
+            self.assertLessEqual(d.travel, 0.005 + 1e-12)
+            self.assertGreaterEqual(tgt[2], self.ANCHOR[2] - 0.005 - 1e-12)
+        # Z decreases monotonically until the cap freezes it.
+        for a, b in zip(zs, zs[1:]):
+            self.assertLessEqual(b, a + 1e-12)
+        self.assertEqual(d.phase, GuardedPhase.HOLD)
+        self.assertEqual(d.steps, 5)  # 0.005 <= cap 0.005 < 0.006
+
+    def test_light_contact_search_continues_below_threshold(self) -> None:
+        """Moderate contact below the hard threshold does NOT back off; search runs."""
+        d = self._descent(baseline_force=np.array([19.0, 0.0, 0.0]))
+        # |F - baseline| = 6 N: engaged (>= 4 N) but well below the 12 N hard guard.
+        moderate = np.array([25.0, 0.0, 0.0])
+        for _ in range(10):
+            d.advance(force=moderate, substeps=1)
+        self.assertEqual(d.contacts, 0)  # no back-off
+        self.assertEqual(d.phase, GuardedPhase.DESCEND)  # still searching
+        self.assertEqual(d.steps, 10)  # push advanced every cycle
+        self.assertGreater(d.theta, 0.0)  # spiral grew under light contact
+        self.assertGreater(d.radius, 0.0)
+
+    def test_free_space_pushes_straight_without_spiral(self) -> None:
+        """Below the engage force the spiral does NOT grow; it pushes straight down."""
+        d = self._descent(baseline_force=np.array([0.0, 0.0, 0.0]))
+        light = np.array([1.0, 0.0, 0.0])  # |F-baseline| = 1 N < engage 4 N
+        for _ in range(6):
+            tgt = d.advance(force=light, substeps=1)[-1]
+        self.assertEqual(d.theta, 0.0)  # no spiral growth out of contact
+        self.assertEqual(d.radius, 0.0)
+        np.testing.assert_allclose(tgt[:2], self.ANCHOR[:2], atol=1e-12)  # no lateral
+
+    def test_wrench_backoff_fires_at_hard_threshold_and_retreats(self) -> None:
+        """A spike above the hard threshold backs off one push step and HOLDs."""
+        d = self._descent(baseline_force=np.array([19.0, 0.0, 0.0]))
+        contact = np.array([24.0, 0.0, 0.0])  # delta 5 N -> engaged, safe
+        d.advance(force=contact, substeps=1)  # steps -> 1
+        d.advance(force=contact, substeps=1)  # steps -> 2
+        self.assertEqual(d.steps, 2)
+        self.assertEqual(d.phase, GuardedPhase.DESCEND)
+        # Spike: |F - baseline| = 16 N > 12 N -> retreat one step and HOLD.
+        d.advance(force=np.array([35.0, 0.0, 0.0]), substeps=1)
+        self.assertEqual(d.phase, GuardedPhase.HOLD)
+        self.assertEqual(d.steps, 1)
+        self.assertEqual(d.contacts, 1)
+        self.assertAlmostEqual(d.last_force_delta, 16.0, places=6)
+        # Once holding, further advances re-command the held target (no motion).
+        held = d.advance(force=np.array([35.0, 0.0, 0.0]), substeps=3)
+        self.assertEqual(held.shape, (3, 7))
+        self.assertEqual(d.steps, 1)
+
+    def test_max_steps_holds(self) -> None:
+        """The max_steps safety bound freezes the search once reached."""
+        d = self._descent(max_steps=2, travel_cap=1.0)
+        contact = np.array([6.0, 0.0, 0.0])
+        d.advance(force=contact, substeps=1)  # steps -> 1
+        d.advance(force=contact, substeps=1)  # steps -> 2
+        self.assertEqual(d.steps, 2)
+        self.assertEqual(d.phase, GuardedPhase.DESCEND)
+        out = d.advance(force=contact, substeps=1)  # steps >= max -> HOLD
+        self.assertEqual(d.phase, GuardedPhase.HOLD)
+        self.assertEqual(out.shape, (1, 7))
+
+    def test_no_baseline_disables_guards_and_spiral(self) -> None:
+        """Without a baseline: no back-off, no contact sensing, straight push only."""
+        d = self._descent(baseline_force=None)
+        for _ in range(6):
+            tgt = d.advance(force=np.array([500.0, 0.0, 0.0]), substeps=1)[-1]
+        self.assertEqual(d.phase, GuardedPhase.DESCEND)  # never backs off
+        self.assertEqual(d.contacts, 0)
+        self.assertEqual(d.theta, 0.0)  # cannot detect contact -> no spiral
+        np.testing.assert_allclose(tgt[:2], self.ANCHOR[:2], atol=1e-12)
+
+    def test_orientation_frozen_when_yaw_amp_zero(self) -> None:
+        """With yaw_amp=0 every commanded orientation equals the anchor quaternion."""
+        d = self._descent(anchor_quaternion=np.array([0.0, 0.0, 0.3827, 0.9239]),
+                          yaw_amp=0.0)
+        contact = np.array([6.0, 0.0, 0.0])
+        for _ in range(6):
+            for sub in d.advance(force=contact, substeps=3):
+                np.testing.assert_allclose(sub[3:], [0.0, 0.0, 0.3827, 0.9239])
+
+    def test_yaw_dither_rotates_orientation_when_enabled(self) -> None:
+        """A non-zero yaw_amp dithers the orientation about the axis (unit quat)."""
+        d = self._descent(yaw_amp=0.05)
+        contact = np.array([6.0, 0.0, 0.0])
+        tgt = d.advance(force=contact, substeps=1)[-1]  # theta advances to omega
+        self.assertFalse(np.allclose(tgt[3:], self.QUAT))  # orientation changed
+        self.assertAlmostEqual(float(np.linalg.norm(tgt[3:])), 1.0, places=9)
+
+    def test_logs_search_lines(self) -> None:
+        """Advancing appends `[search]` telemetry lines when a log list is given."""
+        d = self._descent()
+        logs: list[str] = []
+        d.advance(force=np.array([6.0, 0.0, 0.0]), substeps=1, logs=logs, t=20.0)
+        self.assertTrue(any(ln.startswith("[search]") for ln in logs))
+        self.assertTrue(any("radius=" in ln and "theta=" in ln for ln in logs))
+
+    def test_substeps_shape_and_interpolation(self) -> None:
+        """advance returns (substeps, 7) interpolating position toward the new target."""
+        d = self._descent()
+        out = d.advance(force=np.array([6.0, 0.0, 0.0]), substeps=4)
+        self.assertEqual(out.shape, (4, 7))
+        # The final sub-pose equals the new (current) target.
+        np.testing.assert_allclose(out[-1], d.target(), atol=1e-12)
+
+    def test_bad_arguments_raise(self) -> None:
+        """Malformed / out-of-range constructor arguments raise ValueError."""
+        with self.assertRaises(ValueError):
+            self._descent(axis=np.array([0.0, 0.0, 0.0]))
+        with self.assertRaises(ValueError):
+            self._descent(radius_max=0.0)
+        with self.assertRaises(ValueError):
+            self._descent(turns=0.0)
+        with self.assertRaises(ValueError):
+            self._descent(z_step=-1.0)
+        with self.assertRaises(ValueError):
+            self._descent(omega=0.0)
+        with self.assertRaises(ValueError):
+            self._descent(travel_cap=0.0)
+        with self.assertRaises(ValueError):
+            self._descent(max_steps=-1)
+        with self.assertRaises(ValueError):
+            self._descent(anchor_quaternion=np.array([0.0, 0.0, 0.0, 0.0]))
+        d = self._descent()
+        with self.assertRaises(ValueError):
+            d.advance(force=np.array([6.0, 0.0, 0.0]), substeps=0)
+
+
+class SearchSwitchTest(unittest.TestCase):
+    """Controller switching: search-off is the exact scripted path; on engages it."""
+
+    def _config(self, **overrides: object) -> GuardedDescentConfig:
+        base: dict[str, object] = dict(
+            enabled=True,
+            speed_threshold=0.01,
+            stall_window_s=3.0,
+            min_runtime_s=15.0,
+            step_size=0.004,
+            travel_cap=0.12,
+            contact_force_threshold=12.0,
+        )
+        base.update(overrides)
+        return GuardedDescentConfig(**base)  # type: ignore[arg-type]
+
+    def _run(self, ctrl: GuardedDescentController, substeps: int = 5) -> list:
+        steps = []
+        pos = np.array([0.15, -0.05, 0.60])
+        force = np.array([19.0, 0.0, 0.0])
+        quat = np.array([0.0, 0.0, 0.0, 1.0])
+        for i in range(120):
+            t = i * 0.275
+            if t < 19.0:
+                pos = pos + np.array([0.0, 0.0, -0.01])
+            steps.append(ctrl.cycle(t, pos, quat, force, substeps=substeps))
+        return steps
+
+    def test_search_off_uses_scripted_descent_byte_identical(self) -> None:
+        """`search_enabled` False builds the scripted GuardedDescent -- no SearchDescent."""
+        ctrl_off = GuardedDescentController(self._config(search_enabled=False))
+        ctrl_bare = GuardedDescentController(self._config())  # default: search off
+        steps_off = self._run(ctrl_off)
+        steps_bare = self._run(ctrl_bare)
+        self.assertIsInstance(ctrl_off.descent, GuardedDescent)
+        self.assertNotIsInstance(ctrl_off.descent, SearchDescent)
+        self.assertEqual(ctrl_off._bearing_source, "motion-axis")
+        # Byte-identical targets to the plain guarded path.
+        for a, b in zip(steps_off, steps_bare):
+            if a.targets is None:
+                self.assertIsNone(b.targets)
+            else:
+                np.testing.assert_allclose(a.targets, b.targets)
+
+    def test_search_on_engages_search_descent(self) -> None:
+        """`search_enabled` True hands the stall off to a SearchDescent."""
+        ctrl = GuardedDescentController(self._config(search_enabled=True))
+        steps = self._run(ctrl)
+        self.assertTrue(ctrl.active)
+        self.assertIsInstance(ctrl.descent, SearchDescent)
+        self.assertEqual(ctrl._bearing_source, "search")
+        # Exactly one handoff cycle, logged with a [search] HANDOFF line.
+        self.assertEqual(sum(1 for s in steps if s.triggered_this_cycle), 1)
+        idx = next(i for i, s in enumerate(steps) if s.triggered_this_cycle)
+        self.assertTrue(any("[search] HANDOFF" in ln for ln in steps[idx].log_lines))
+        # After handoff, sub-stepped 7-D pose targets are commanded.
+        post = steps[idx]
+        assert post.targets is not None
+        self.assertEqual(post.targets.shape[1], 7)
+        # Pre-handoff cycles keep the learned path (targets None).
+        self.assertTrue(all(s.targets is None for s in steps[:idx]))
+
+    def test_search_takes_precedence_over_specialist(self) -> None:
+        """With both flags set the controller engages the scripted search, not the specialist."""
+        chunk = np.tile(np.array([0.0, 0.0, -0.02, 0.0, 0.0, 0.0]), (8, 1))
+        prov = _ChunkProvider(chunk)
+        ctrl = GuardedDescentController(
+            self._config(search_enabled=True, specialist_enabled=True),
+            specialist_provider=prov,
+        )
+        self._run(ctrl)
+        self.assertTrue(ctrl.active)
+        self.assertIsInstance(ctrl.descent, SearchDescent)
+        self.assertEqual(ctrl._bearing_source, "search")
+        self.assertEqual(prov.calls, 0)  # specialist never queried
+
+    def test_search_no_axis_stays_on_learned_path(self) -> None:
+        """A stall with no recorded approach motion does not engage the search."""
+        ctrl = GuardedDescentController(self._config(search_enabled=True))
+        pos = np.array([0.15, -0.05, 0.60])  # never moves -> no motion axis
+        force = np.array([19.0, 0.0, 0.0])
+        quat = np.array([0.0, 0.0, 0.0, 1.0])
+        logged = False
+        for i in range(120):
+            step = ctrl.cycle(i * 0.275, pos, quat, force, substeps=5)
+            self.assertIsNone(step.targets)
+            logged = logged or any("could not be estimated" in ln for ln in step.log_lines)
+        self.assertFalse(ctrl.active)
+        self.assertTrue(logged)
 
 
 if __name__ == "__main__":

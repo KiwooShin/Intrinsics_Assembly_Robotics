@@ -45,6 +45,7 @@ from aic_example_policies.ros import state_assembly
 from aic_example_policies.ros.guarded_descent import (
     GuardedDescentConfig,
     GuardedDescentController,
+    GuardedTraceWriter,
 )
 from aic_example_policies.ros.port_offset import (
     PortOffsetPrediction,
@@ -134,15 +135,22 @@ class _AuxBearingProvider:
             quaternion: Current TCP orientation ``(4,)`` (unused; see above).
 
         Returns:
-            ``(target_base, magnitude, ok)`` per the ``PortBearingProvider``
-            protocol; ``(None, 0.0, False)`` when no observation/aux head.
+            ``(target_base, magnitude, ok, axis_base)`` per the
+            ``PortBearingProvider`` protocol -- ``axis_base`` is the explicit unit
+            approach axis for a 6-D checkpoint else None;
+            ``(None, 0.0, False, None)`` when no observation/aux head.
         """
         if self.obs is None:
-            return None, 0.0, False
+            return None, 0.0, False, None
         pred = self._deploy._predict_offset(self.obs)
         if pred is None:
-            return None, 0.0, False
-        return pred.target_base, pred.magnitude, pred.plausible(self._min_mag, self._max_mag)
+            return None, 0.0, False, None
+        return (
+            pred.target_base,
+            pred.magnitude,
+            pred.plausible(self._min_mag, self._max_mag),
+            pred.axis_base,
+        )
 
 
 class DeployACT(Policy):
@@ -393,6 +401,18 @@ class DeployACT(Policy):
             if self._guarded_config is not None
             else None
         )
+        # Per-trial guarded telemetry mirror. The '[guarded]' handoff/HOLD/step
+        # lines are emitted via the ROS logger, which only reliably reaches the
+        # engine's captured stdout on some paths (forensics caveat, 2026-07-19);
+        # when the probe is active also append them to ``guarded_trace.log`` in the
+        # process CWD (the per-trial directory at runtime). Opt out with
+        # AIC_GUARDED_TRACE=0.
+        guarded_trace = (
+            GuardedTraceWriter()
+            if guarded is not None
+            and os.environ.get("AIC_GUARDED_TRACE", "1").strip() != "0"
+            else None
+        )
         while (self.time_now() - start) < budget:
             obs = get_observation()
             if obs is None:
@@ -415,18 +435,23 @@ class DeployACT(Policy):
                                       self._wrench_force(obs), substeps=SUBSTEPS)
                 for line in gstep.log_lines:
                     self.get_logger().info(line)
+                if guarded_trace is not None:
+                    guarded_trace.write_lines(gstep.log_lines)
                 if gstep.targets is not None:
                     stiffness = gstep.stiffness if gstep.stiffness is not None else POSE_STIFFNESS
                     self._command_targets(move_robot, gstep.targets, stiffness, dt_fine)
                     send_feedback("DeployACT guarded descent")
                     if elapsed_g - last_log >= 2.0:
                         last_log = elapsed_g
-                        self.get_logger().info(
+                        status = (
                             f"t={elapsed_g:4.1f}s GUARDED phase={gstep.phase} "
                             f"steps={gstep.steps} travel={gstep.travel*1e3:.1f}mm "
                             f"|F-base|={gstep.force_delta:.2f}N contacts={gstep.contacts} "
                             f"tcp=({pos_g[0]:+.3f},{pos_g[1]:+.3f},{pos_g[2]:+.3f})"
                         )
+                        self.get_logger().info(status)
+                        if guarded_trace is not None:
+                            guarded_trace.write_lines((status,))
                     continue
             chunk = self._predict_chunk(obs)                       # (K, 6)
             p = obs.controller_state.tcp_pose

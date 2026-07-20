@@ -41,7 +41,9 @@ import collections
 import dataclasses
 import enum
 import math
-from typing import Mapping, Protocol
+import os
+import pathlib
+from typing import Iterable, Mapping, Protocol
 
 import numpy as np
 
@@ -70,6 +72,13 @@ DEFAULT_AUX_TRAVEL_MARGIN: float = 0.02  # m added to |offset| for the travel ca
 DEFAULT_AUX_BUFFER: int = 6  # recent approach-frame predictions kept for the median.
 DEFAULT_AUX_MIN_SAMPLES: int = 3  # plausible predictions required before a handoff.
 DEFAULT_REAIM_RATE: float = 0.2  # per-cycle axis blend toward a re-queried target.
+# Fixed deep-travel cap (m) used when the aux head supplies an EXPLICIT approach
+# axis (6-D checkpoint): the descent steers by that axis and travels a fixed
+# distance, decoupled from the unreliable predicted |offset| magnitude (forensics
+# 2026-07-19: depth val error ~4.6 cm, lateral/axis ~0.86 cm).
+DEFAULT_AUX_FIXED_TRAVEL: float = 0.10
+# Per-trial guarded telemetry mirror written in the process CWD (the trial dir).
+DEFAULT_TRACE_FILENAME: str = "guarded_trace.log"
 
 _QUAT_MIN_NORM: float = 1e-9
 _AXIS_MIN_NORM: float = 1e-9
@@ -86,18 +95,22 @@ class PortBearingProvider(Protocol):
 
     def predict(
         self, position: np.ndarray, quaternion: np.ndarray
-    ) -> tuple[np.ndarray | None, float, bool]:
-        """Return the estimated port target in base_link.
+    ) -> tuple[np.ndarray | None, float, bool, np.ndarray | None]:
+        """Return the estimated port target (and optional axis) in base_link.
 
         Args:
             position: Current TCP position ``(3,)`` in base_link (m).
             quaternion: Current TCP orientation ``(4,)`` ``[x, y, z, w]``.
 
         Returns:
-            A tuple ``(target_base, magnitude, ok)`` where ``target_base`` is the
-            ``(3,)`` predicted port point in base_link (or None when unavailable),
-            ``magnitude`` is ``|offset|`` (m), and ``ok`` flags a usable
-            prediction (finite, plausible magnitude).
+            A tuple ``(target_base, magnitude, ok, axis_base)`` where
+            ``target_base`` is the ``(3,)`` predicted port point in base_link (or
+            None when unavailable), ``magnitude`` is ``|offset|`` (m), ``ok`` flags
+            a usable prediction (finite, plausible magnitude), and ``axis_base`` is
+            the ``(3,)`` explicit unit approach axis in base_link when the head
+            predicts one (6-D checkpoint) else None. A legacy 3-tuple return
+            ``(target_base, magnitude, ok)`` is also accepted (treated as
+            ``axis_base = None``).
         """
         ...
 
@@ -485,7 +498,12 @@ class GuardedDescentConfig:
         aux_consistency_std: Ceiling on the cross-frame spread (m) of the buffered
             target predictions; a noisier estimate falls back to the motion axis.
         aux_travel_margin: Metres added to ``|offset|`` for the aux travel cap so
-            the descent reaches the port then stops (design section 4.3).
+            the descent reaches the port then stops (design section 4.3). Used
+            only for a 3-D (offset-only) checkpoint.
+        aux_fixed_travel: Fixed deep-travel cap (m) used instead of
+            ``|offset| + aux_travel_margin`` when the head supplies an explicit
+            approach axis (6-D checkpoint), decoupling steering from the
+            unreliable predicted depth magnitude.
         aux_buffer: Number of recent approach-frame predictions kept for the
             median target (steadier than a single stall-frame query).
         aux_min_samples: Minimum buffered plausible predictions before the aux
@@ -512,6 +530,7 @@ class GuardedDescentConfig:
     aux_max_mag: float = DEFAULT_AUX_MAX_MAG
     aux_consistency_std: float = DEFAULT_AUX_CONSISTENCY_STD
     aux_travel_margin: float = DEFAULT_AUX_TRAVEL_MARGIN
+    aux_fixed_travel: float = DEFAULT_AUX_FIXED_TRAVEL
     aux_buffer: int = DEFAULT_AUX_BUFFER
     aux_min_samples: int = DEFAULT_AUX_MIN_SAMPLES
     reaim: bool = False
@@ -543,7 +562,9 @@ class GuardedDescentConfig:
         ``AIC_GUARDED_ZSTIFFNESS``. Learned-bearing (``port_aux``) handoff:
         ``AIC_GUARDED_AUX`` (``"1"`` uses the aux bearing), ``AIC_GUARDED_AUX_MINMAG``,
         ``AIC_GUARDED_AUX_MAXMAG``, ``AIC_GUARDED_AUX_STD``,
-        ``AIC_GUARDED_AUX_MARGIN``, ``AIC_GUARDED_REAIM`` (``"1"`` re-aims).
+        ``AIC_GUARDED_AUX_MARGIN``, ``AIC_GUARDED_AUX_TRAVEL`` (fixed deep-travel
+        cap for the 6-D explicit-axis descent), ``AIC_GUARDED_REAIM``
+        (``"1"`` re-aims).
 
         Args:
             env: Environment mapping (e.g. ``os.environ``).
@@ -597,6 +618,7 @@ class GuardedDescentConfig:
             aux_max_mag=_f("AIC_GUARDED_AUX_MAXMAG", DEFAULT_AUX_MAX_MAG),
             aux_consistency_std=_f("AIC_GUARDED_AUX_STD", DEFAULT_AUX_CONSISTENCY_STD),
             aux_travel_margin=_f("AIC_GUARDED_AUX_MARGIN", DEFAULT_AUX_TRAVEL_MARGIN),
+            aux_fixed_travel=_f("AIC_GUARDED_AUX_TRAVEL", DEFAULT_AUX_FIXED_TRAVEL),
             reaim=env.get("AIC_GUARDED_REAIM", "0").strip() == "1",
         )
 
@@ -685,6 +707,13 @@ class GuardedDescentController:
         # median-reduced at handoff for a steadier aim than a single stall-frame
         # query. Only populated when a provider is wired and use_aux_bearing is on.
         self._aux_targets: collections.deque[np.ndarray] = collections.deque(
+            maxlen=config.aux_buffer
+        )
+        # Paired explicit approach axes (unit, base_link) when the head is 6-D,
+        # else None per frame; kept in lockstep with ``_aux_targets`` so the
+        # handoff can steer by the aux axis channel and cap travel at a fixed
+        # depth, decoupled from the unreliable predicted |offset| magnitude.
+        self._aux_axes: collections.deque[np.ndarray | None] = collections.deque(
             maxlen=config.aux_buffer
         )
 
@@ -809,14 +838,20 @@ class GuardedDescentController:
         return self._result(targets, tuple(logs), triggered_this_cycle)
 
     def _buffer_aux_prediction(self, pos: np.ndarray, quat: np.ndarray) -> None:
-        """Query the provider this cycle and buffer a plausible target.
+        """Query the provider this cycle and buffer a plausible target (+ axis).
+
+        Buffers the predicted base_link target and, in lockstep, the paired unit
+        approach axis when the head supplies one (6-D checkpoint) or None (3-D
+        checkpoint) so the handoff can steer by the explicit axis channel.
 
         Args:
             pos: Current TCP position ``(3,)`` (m).
             quat: Current TCP orientation ``(4,)`` ``[x, y, z, w]``.
         """
         assert self.bearing_provider is not None
-        target, magnitude, ok = self.bearing_provider.predict(pos, quat)
+        target, magnitude, ok, axis = _split_reading(
+            self.bearing_provider.predict(pos, quat)
+        )
         if not ok or target is None:
             return
         t = np.asarray(target, dtype=np.float64).reshape(-1)
@@ -824,40 +859,68 @@ class GuardedDescentController:
             return
         if self.config.aux_min_mag <= magnitude <= self.config.aux_max_mag:
             self._aux_targets.append(t)
+            self._aux_axes.append(_unit_axis(axis))
 
-    def _resolve_aux_target(self, pos: np.ndarray) -> tuple[np.ndarray | None, str]:
-        """Reduce the buffered predictions to a trusted target, or explain why not.
+    def _resolve_aux_target(
+        self, pos: np.ndarray
+    ) -> tuple[np.ndarray | None, np.ndarray | None, str]:
+        """Reduce the buffered predictions to a trusted target + axis, or explain.
 
         Applies the plausibility + consistency gate (design section 4.4): enough
         samples, in-range magnitude, low cross-frame spread, and pointing along
-        the established approach (not away, which flags a wrong-port lock).
+        the established approach (not away, which flags a wrong-port lock). When
+        every buffered prediction carried an explicit approach axis (6-D
+        checkpoint), the mean of those unit axes is returned as ``axis_base`` so
+        the handoff steers by the aux axis rather than the noisy offset direction;
+        otherwise ``axis_base`` is None (3-D checkpoint, offset-derived axis).
 
         Args:
             pos: Anchor TCP position ``(3,)`` at handoff (m).
 
         Returns:
-            ``(target_base, "")`` when the aux target is trusted, else
-            ``(None, reason)`` naming the failed check for the fallback log.
+            ``(target_base, axis_base, "")`` when the aux target is trusted (with
+            ``axis_base`` a unit vector for a 6-D head else None), else
+            ``(None, None, reason)`` naming the failed check for the fallback log.
         """
         n = len(self._aux_targets)
         if n < self.config.aux_min_samples:
-            return None, f"only {n} aux samples (<{self.config.aux_min_samples})"
+            return None, None, f"only {n} aux samples (<{self.config.aux_min_samples})"
         stack = np.stack(self._aux_targets)
         median = np.median(stack, axis=0)
         spread = float(np.linalg.norm(stack.std(axis=0)))
         d = median - pos
         mag = float(np.linalg.norm(d))
         if not (self.config.aux_min_mag <= mag <= self.config.aux_max_mag):
-            return None, f"|offset|={mag * 1e3:.0f}mm out of range"
+            return None, None, f"|offset|={mag * 1e3:.0f}mm out of range"
         if spread > self.config.aux_consistency_std:
-            return None, (
+            return None, None, (
                 f"cross-frame std {spread * 1e3:.1f}mm>"
                 f"{self.config.aux_consistency_std * 1e3:.0f}mm"
             )
         motion_axis = self.axis_estimator.estimate()
         if motion_axis is not None and float(np.dot(d / mag, motion_axis)) <= 0.0:
-            return None, "aux points away from the approach"
-        return median, ""
+            return None, None, "aux points away from the approach"
+        return median, self._reduce_aux_axis(), ""
+
+    def _reduce_aux_axis(self) -> np.ndarray | None:
+        """Return the mean unit approach axis over the buffer, or None.
+
+        Only returns an axis when every buffered prediction carried an explicit
+        axis (a 6-D checkpoint); a single missing axis (3-D checkpoint, or a
+        degenerate prediction) yields None so the caller derives the axis from the
+        offset direction instead.
+
+        Returns:
+            The ``(3,)`` mean unit approach axis in base_link, or None.
+        """
+        axes = list(self._aux_axes)
+        if not axes or any(a is None for a in axes):
+            return None
+        mean = np.mean(np.stack(axes), axis=0)
+        norm = float(np.linalg.norm(mean))
+        if norm < _AXIS_MIN_NORM:
+            return None
+        return mean / norm
 
     def _engage_descent(
         self,
@@ -869,11 +932,15 @@ class GuardedDescentController:
     ) -> bool:
         """Build the :class:`GuardedDescent` at handoff, aux-first with fallback.
 
-        Prefers the learned port bearing (axis toward the aux target, travel cap
-        clamped to ``|offset| + margin`` so the descent reaches the port then
-        stops); falls back to the :class:`ApproachAxisEstimator` motion axis when
-        the aux prediction is unavailable/implausible/inconsistent. Returns False
-        (staying on the learned path) only when neither bearing is available.
+        Prefers the learned port bearing. For a 6-D checkpoint the head's EXPLICIT
+        approach axis steers the descent (sign-checked against the offset) and
+        travel is capped at the FIXED ``aux_fixed_travel`` depth, decoupling
+        steering from the unreliable predicted ``|offset|`` magnitude; for a 3-D
+        checkpoint the axis points along the offset and travel is capped at
+        ``|offset| + margin``. Falls back to the :class:`ApproachAxisEstimator`
+        motion axis when the aux prediction is unavailable/implausible/inconsistent.
+        Returns False (staying on the learned path) only when no bearing is
+        available.
 
         Args:
             t: Elapsed time (s).
@@ -887,17 +954,31 @@ class GuardedDescentController:
             path (no usable bearing).
         """
         aux_target: np.ndarray | None = None
+        aux_axis: np.ndarray | None = None
         aux_reason = ""
         if self._aux_active:
-            aux_target, aux_reason = self._resolve_aux_target(pos)
+            aux_target, aux_axis, aux_reason = self._resolve_aux_target(pos)
 
+        axis_mode = ""
         if aux_target is not None:
             d = aux_target - pos
             mag = float(np.linalg.norm(d))
-            axis = d / mag
-            travel_cap = min(
-                self.config.travel_cap, mag + self.config.aux_travel_margin
-            )
+            if aux_axis is not None:
+                # 6-D checkpoint: steer by the head's EXPLICIT approach axis and
+                # travel a FIXED deep distance, decoupling the descent from the
+                # unreliable predicted |offset| magnitude. Sign-check the axis
+                # against the offset (flip if it points away from the target).
+                axis = -aux_axis if float(np.dot(aux_axis, d)) < 0.0 else aux_axis
+                travel_cap = min(self.config.travel_cap, self.config.aux_fixed_travel)
+                axis_mode = "explicit6D"
+            else:
+                # 3-D checkpoint: aim along the offset direction and cap travel at
+                # |offset| + margin (byte-identical to the pre-6-D behavior).
+                axis = d / mag
+                travel_cap = min(
+                    self.config.travel_cap, mag + self.config.aux_travel_margin
+                )
+                axis_mode = "offset3D"
             self._bearing_source = "aux"
         else:
             axis = self.axis_estimator.estimate()
@@ -926,8 +1007,9 @@ class GuardedDescentController:
         baseline_norm = 0.0 if baseline is None else float(np.linalg.norm(baseline))
         if self._bearing_source == "aux":
             bearing_desc = (
-                f"bearing=aux target=({aux_target[0]:+.3f},{aux_target[1]:+.3f},"
-                f"{aux_target[2]:+.3f}) |offset|={float(np.linalg.norm(d)) * 1e3:.1f}mm"
+                f"bearing=aux[{axis_mode}] target=({aux_target[0]:+.3f},"
+                f"{aux_target[1]:+.3f},{aux_target[2]:+.3f}) "
+                f"|offset|={float(np.linalg.norm(d)) * 1e3:.1f}mm"
             )
         else:
             reason = f" (aux fallback: {aux_reason})" if aux_reason else ""
@@ -951,7 +1033,9 @@ class GuardedDescentController:
             quat: Current TCP orientation ``(4,)`` ``[x, y, z, w]``.
         """
         assert self.bearing_provider is not None and self.descent is not None
-        target, magnitude, ok = self.bearing_provider.predict(pos, quat)
+        target, magnitude, ok, _axis = _split_reading(
+            self.bearing_provider.predict(pos, quat)
+        )
         if not ok or target is None:
             return
         t = np.asarray(target, dtype=np.float64).reshape(-1)
@@ -1022,3 +1106,93 @@ def _interpolate_targets(
         out[k - 1, :3] = prev[:3] + (new[:3] - prev[:3]) * frac
         out[k - 1, 3:] = new[3:]
     return out
+
+
+def _split_reading(
+    reading: tuple,
+) -> tuple[np.ndarray | None, float, bool, np.ndarray | None]:
+    """Normalize a provider reading into ``(target, magnitude, ok, axis)``.
+
+    Accepts the canonical 4-tuple ``(target, magnitude, ok, axis_base)`` and the
+    legacy 3-tuple ``(target, magnitude, ok)`` (``axis`` defaults to None), so a
+    3-D (offset-only) provider stays byte-identical.
+
+    Args:
+        reading: The ``PortBearingProvider.predict`` return (3- or 4-tuple).
+
+    Returns:
+        The 4-tuple ``(target_base, magnitude, ok, axis_base)`` with ``axis_base``
+        None when the reading carried no explicit axis.
+    """
+    target = reading[0]
+    magnitude = float(reading[1])
+    ok = bool(reading[2])
+    axis = reading[3] if len(reading) >= 4 else None
+    return target, magnitude, ok, axis
+
+
+def _unit_axis(axis: np.ndarray | None) -> np.ndarray | None:
+    """Return ``axis`` as a finite ``(3,)`` unit vector, or None if unusable.
+
+    Args:
+        axis: A candidate approach axis ``(3,)`` in base_link, or None.
+
+    Returns:
+        The normalized axis, or None when ``axis`` is None, malformed, non-finite,
+        or has near-zero norm (any of which falls the caller back to the
+        offset-derived direction).
+    """
+    if axis is None:
+        return None
+    a = np.asarray(axis, dtype=np.float64).reshape(-1)
+    if a.shape != (3,) or not np.all(np.isfinite(a)):
+        return None
+    norm = float(np.linalg.norm(a))
+    if norm < _AXIS_MIN_NORM:
+        return None
+    return a / norm
+
+
+class GuardedTraceWriter:
+    """Appends guarded-descent log lines to a per-trial trace file.
+
+    ``DeployACT`` emits the guarded ``[guarded]`` handoff/HOLD lines and the
+    periodic step status through its ROS logger, but those only reliably reach the
+    engine's captured stdout on some code paths (forensics caveat, 2026-07-19).
+    This tiny append-only writer mirrors them to a plain file in the process's
+    current working directory -- at runtime the per-trial directory -- so the
+    guarded telemetry is always recoverable per trial. It holds no file handle
+    open between writes (each call opens, appends, and closes) so a crashed or
+    killed trial still leaves a complete trace; an empty batch writes nothing (no
+    stray empty file is created).
+    """
+
+    def __init__(self, path: str | os.PathLike[str] = DEFAULT_TRACE_FILENAME) -> None:
+        """Initialize the writer.
+
+        Args:
+            path: Destination file; defaults to ``guarded_trace.log`` in the
+                process CWD (the per-trial directory at runtime).
+        """
+        self.path = pathlib.Path(path)
+
+    def write_lines(self, lines: Iterable[str]) -> int:
+        """Append log lines to the trace file, one per line.
+
+        Args:
+            lines: Log lines to append (a trailing newline is added per line).
+
+        Returns:
+            The number of lines written (0 for an empty batch, which opens no
+            file).
+
+        Raises:
+            OSError: If the file cannot be opened or written.
+        """
+        materialized = [str(line) for line in lines]
+        if not materialized:
+            return 0
+        with self.path.open("a", encoding="utf-8") as fh:
+            for line in materialized:
+                fh.write(f"{line}\n")
+        return len(materialized)

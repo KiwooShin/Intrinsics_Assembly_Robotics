@@ -15,11 +15,14 @@ Run with::
 
 from __future__ import annotations
 
+import pathlib
+import tempfile
 import unittest
 
 import numpy as np
 
 from aic_example_policies.ros.guarded_descent import (
+    DEFAULT_AUX_FIXED_TRAVEL,
     DEFAULT_CONTACT_FORCE_THRESHOLD,
     DEFAULT_STEP_SIZE,
     DEFAULT_TRAVEL_CAP,
@@ -28,6 +31,7 @@ from aic_example_policies.ros.guarded_descent import (
     GuardedDescentConfig,
     GuardedDescentController,
     GuardedPhase,
+    GuardedTraceWriter,
     StallDetector,
 )
 
@@ -338,6 +342,27 @@ class GuardedDescentConfigTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             GuardedDescentConfig.from_env({"AIC_GUARDED": "1", "AIC_GUARDED_STEP": "abc"})
 
+    def test_aux_fixed_travel_default(self) -> None:
+        """`aux_fixed_travel` defaults to DEFAULT_AUX_FIXED_TRAVEL when unset."""
+        self.assertEqual(
+            GuardedDescentConfig.from_env({}).aux_fixed_travel, DEFAULT_AUX_FIXED_TRAVEL
+        )
+        self.assertEqual(GuardedDescentConfig().aux_fixed_travel, DEFAULT_AUX_FIXED_TRAVEL)
+
+    def test_aux_fixed_travel_env_parses(self) -> None:
+        """`AIC_GUARDED_AUX_TRAVEL` overrides the fixed deep-travel cap."""
+        cfg = GuardedDescentConfig.from_env(
+            {"AIC_GUARDED": "1", "AIC_GUARDED_AUX": "1", "AIC_GUARDED_AUX_TRAVEL": "0.08"}
+        )
+        self.assertEqual(cfg.aux_fixed_travel, 0.08)
+
+    def test_aux_fixed_travel_bad_override_raises(self) -> None:
+        """A non-numeric `AIC_GUARDED_AUX_TRAVEL` raises ValueError."""
+        with self.assertRaises(ValueError):
+            GuardedDescentConfig.from_env(
+                {"AIC_GUARDED": "1", "AIC_GUARDED_AUX_TRAVEL": "deep"}
+            )
+
     def test_stiffness_helper(self) -> None:
         """`stiffness()` returns None by default, else base with Z replaced."""
         self.assertIsNone(GuardedDescentConfig().stiffness())
@@ -523,6 +548,27 @@ class _AlternatingProvider:
         return target, float(np.linalg.norm(off)), True
 
 
+class _AxisProvider:
+    """Fake 6-D provider: target = TCP + offset, plus an EXPLICIT approach axis.
+
+    Returns the canonical 4-tuple ``(target, magnitude, ok, axis_base)``. ``axis``
+    may be None to emulate a 3-D (offset-only) checkpoint on the 4-tuple path.
+    """
+
+    def __init__(self, offset: np.ndarray, axis: np.ndarray | None, ok: bool = True) -> None:
+        self.offset = np.asarray(offset, dtype=np.float64)
+        self.axis = None if axis is None else np.asarray(axis, dtype=np.float64)
+        self.ok = ok
+        self.calls = 0
+
+    def predict(self, position, quaternion):
+        self.calls += 1
+        if not self.ok:
+            return None, 0.0, False, None
+        target = np.asarray(position, dtype=np.float64) + self.offset
+        return target, float(np.linalg.norm(self.offset)), True, self.axis
+
+
 class AuxBearingHandoffTest(unittest.TestCase):
     """Tests for the learned port-bearing (``port_aux``) handoff seam."""
 
@@ -540,6 +586,7 @@ class AuxBearingHandoffTest(unittest.TestCase):
             aux_max_mag=0.12,
             aux_consistency_std=0.01,
             aux_travel_margin=0.02,
+            aux_fixed_travel=0.10,
             aux_min_samples=3,
         )
         base.update(overrides)
@@ -653,6 +700,115 @@ class AuxBearingHandoffTest(unittest.TestCase):
         for j in range(5):
             ctrl.cycle(30.0 + j * 0.275, pos, quat, force, substeps=3)
         self.assertGreater(ctrl.descent.axis[0], axis_at_handoff[0])
+
+    def test_explicit_axis_used_and_fixed_cap(self) -> None:
+        """A 6-D explicit axis steers the descent and a FIXED travel cap applies."""
+        # Offset is 6 cm down; the explicit axis agrees (-Z). With a 3-D provider
+        # the cap would be |offset|+margin = 0.08; the 6-D path instead uses the
+        # fixed cap min(travel_cap, aux_fixed_travel) = min(0.12, 0.10) = 0.10,
+        # decoupled from |offset|.
+        prov = _AxisProvider(np.array([0.0, 0.0, -0.06]), np.array([0.0, 0.0, -1.0]))
+        ctrl = GuardedDescentController(
+            self._aux_config(travel_cap=0.12, aux_fixed_travel=0.10),
+            bearing_provider=prov,
+        )
+        steps = self._run(ctrl)
+        _, handoff = self._handoff(steps)
+        self.assertEqual(ctrl._bearing_source, "aux")
+        np.testing.assert_allclose(ctrl.descent.axis, [0.0, 0.0, -1.0], atol=1e-6)
+        self.assertAlmostEqual(ctrl.descent.travel_cap, 0.10, places=6)
+        self.assertTrue(any("explicit6D" in ln for ln in handoff.log_lines))
+
+    def test_explicit_axis_ignores_offset_magnitude(self) -> None:
+        """The 6-D fixed cap ignores |offset| (a small offset still travels deep)."""
+        # A 2 cm offset would cap a 3-D descent at 0.04 m; the 6-D fixed cap keeps
+        # the full 0.10 m deep travel regardless of the (unreliable) magnitude.
+        prov = _AxisProvider(np.array([0.0, 0.0, -0.02]), np.array([0.0, 0.0, -1.0]))
+        ctrl = GuardedDescentController(
+            self._aux_config(travel_cap=0.12, aux_fixed_travel=0.10),
+            bearing_provider=prov,
+        )
+        steps = self._run(ctrl)
+        self.assertEqual(ctrl._bearing_source, "aux")
+        self.assertAlmostEqual(ctrl.descent.travel_cap, 0.10, places=6)
+
+    def test_explicit_axis_sign_flipped_to_match_offset(self) -> None:
+        """An explicit axis pointing away from the target is sign-flipped."""
+        # The head emits +Z (away from the -Z approach/offset); the handoff must
+        # flip it so the descent still advances toward the port (dot with offset
+        # positive).
+        prov = _AxisProvider(np.array([0.0, 0.0, -0.06]), np.array([0.0, 0.0, +1.0]))
+        ctrl = GuardedDescentController(self._aux_config(), bearing_provider=prov)
+        steps = self._run(ctrl)
+        _, handoff = self._handoff(steps)
+        self.assertEqual(ctrl._bearing_source, "aux")
+        np.testing.assert_allclose(ctrl.descent.axis, [0.0, 0.0, -1.0], atol=1e-6)
+        offset = np.array([0.0, 0.0, -0.06])
+        self.assertGreater(float(np.dot(ctrl.descent.axis, offset)), 0.0)
+        self.assertTrue(any("explicit6D" in ln for ln in handoff.log_lines))
+
+    def test_none_axis_falls_back_to_offset_cap(self) -> None:
+        """A 4-tuple provider with axis=None takes the byte-identical 3-D path."""
+        prov = _AxisProvider(np.array([0.0, 0.0, -0.06]), axis=None)
+        ctrl = GuardedDescentController(
+            self._aux_config(travel_cap=0.12, aux_fixed_travel=0.10),
+            bearing_provider=prov,
+        )
+        steps = self._run(ctrl)
+        _, handoff = self._handoff(steps)
+        self.assertEqual(ctrl._bearing_source, "aux")
+        np.testing.assert_allclose(ctrl.descent.axis, [0.0, 0.0, -1.0], atol=1e-6)
+        # |offset| + margin = 0.06 + 0.02 = 0.08 (NOT the fixed 0.10 cap).
+        self.assertAlmostEqual(ctrl.descent.travel_cap, 0.08, places=6)
+        self.assertTrue(any("offset3D" in ln for ln in handoff.log_lines))
+
+    def test_none_axis_matches_legacy_3tuple(self) -> None:
+        """The 4-tuple axis=None path is byte-identical to a legacy 3-tuple provider."""
+        off = np.array([0.0, 0.0, -0.06])
+        ctrl_legacy = GuardedDescentController(
+            self._aux_config(), bearing_provider=_FollowProvider(off)
+        )
+        ctrl_none = GuardedDescentController(
+            self._aux_config(), bearing_provider=_AxisProvider(off, axis=None)
+        )
+        steps_legacy = self._run(ctrl_legacy)
+        steps_none = self._run(ctrl_none)
+        np.testing.assert_allclose(ctrl_legacy.descent.axis, ctrl_none.descent.axis)
+        self.assertAlmostEqual(
+            ctrl_legacy.descent.travel_cap, ctrl_none.descent.travel_cap, places=9
+        )
+        _, hl = self._handoff(steps_legacy)
+        _, hn = self._handoff(steps_none)
+        assert hl.targets is not None and hn.targets is not None
+        np.testing.assert_allclose(hl.targets, hn.targets)
+
+
+class GuardedTraceWriterTest(unittest.TestCase):
+    """Tests for the per-trial guarded telemetry file writer."""
+
+    def test_writes_and_appends_lines(self) -> None:
+        """Lines are appended in order across successive writes."""
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "guarded_trace.log"
+            writer = GuardedTraceWriter(path)
+            n1 = writer.write_lines(["[guarded] HANDOFF ...", "line-2"])
+            n2 = writer.write_lines(("line-3",))
+            self.assertEqual((n1, n2), (2, 1))
+            self.assertEqual(
+                path.read_text(encoding="utf-8").splitlines(),
+                ["[guarded] HANDOFF ...", "line-2", "line-3"],
+            )
+
+    def test_empty_batch_writes_nothing(self) -> None:
+        """An empty batch writes zero lines and creates no file."""
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "guarded_trace.log"
+            self.assertEqual(GuardedTraceWriter(path).write_lines([]), 0)
+            self.assertFalse(path.exists())
+
+    def test_default_filename(self) -> None:
+        """The default destination is guarded_trace.log."""
+        self.assertEqual(GuardedTraceWriter().path.name, "guarded_trace.log")
 
 
 if __name__ == "__main__":

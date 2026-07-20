@@ -822,3 +822,39 @@ collection; seated-pose-only collection (official_3, cfg_006, cfg_007) allowed a
 secondary. Remaining partials stall at exactly 0.01 m regardless of floor depth →
 pose-dependent binding (lateral/angular misalignment at the mouth), not depth —
 handed to 00:00 analysis agents.
+
+### 2026-07-20 00:05 — Cycle-3 analysis synthesis (2 Opus agents: day-arc forensics + D-plan critique)
+
+**Forensics (what moved the gauge):** the 23.1→28.0 mean / 21.8→35.8 IQM move is
+a single failure-mode swap on official_1 (mount collision → clean proximity) from
+the aux bearing head, stabilized by the travel cap; no lever added insertion or
+net proximity, and on the officials MEAN the whole stack is a wash (35.7 ≈ bare
+35.8, within sd 3–18). Rung 40: needs +180 Σ over 15 trials; cfg_001 dead spot
+costs ≈8.8 composite pts (ab5-minus-cfg_001 = 36.8); official-side proximity
+headroom without a seat is only ≈+3–4, so one insertion (+53/trial ≈ +3.5
+composite) is the robust path. SC 4-blocked-poses separator is **rail/board_x**,
+not yaw/port/threshold — rail1 (board_x≈0.20) seats at any yaw (−1.8…+2.84),
+rail0/rail2 (≈0.15–0.18) block at exactly 0.01 m → lateral waypoint-calibration
+bias (oracle tuned on official_3 = rail1); secondary: cfg_002/003 carry the two
+highest grasp_z.
+
+**D-plan critique (three corrections that reshaped the 04:00 plan):**
+1. Dead |yaw|∈[1.2,1.5] port_0 band = **cfg_000/004/008**, NOT cfg_001; cfg_001
+   (+0.837 yaw, port_1) is a *separate* dead spot and the one actually in ab5.
+2. **Frozen-probe trap**: v2_auxprobe.pt freezes encoder AND action head — a 0/9
+   reach band can only move by retraining the **unfrozen action head**; demos into
+   the frozen probe do nothing. Retrain must warm-start v2_wide with the PLAIN
+   recipe (the wrench/tail-trim/pushin levers are exactly what got v3fix rejected).
+3. **Sampler gap**: gen_config side band shallow edge is −1.4, so cfg_008 (−1.226)
+   is out of the collection distribution — the generator must force yaw ∈ [−1.5,−1.2].
+
+**Adopted 04:00 plan:** gen_deadband.py (forced yaw, rails 0/1/2, port_0 + cfg_001
+region) → collect_campaign (resumable, bags deleted) → 2-stage retrain (unfrozen
+action warm-start + frozen 3-D aux) → n=3 eval gate (dead band + official_1/3
+regression) → adopt only on ≥1 insertion AND officials hold (pointer swap) →
+demo video. SC excluded (3/7 < 5/8 gate, shares SFP cable). Biggest risk = action
+retrain regresses shippable officials (the v3fix failure); mitigated by warm-start
++ plain recipe + hard n=3 regression gate + reversible pointer swap.
+
+**Infra fix this cycle:** guarded_trace.log now written per-trial via
+AIC_GUARDED_TRACE_DIR (was interleaving at repo-root CWD); 170 tests green.

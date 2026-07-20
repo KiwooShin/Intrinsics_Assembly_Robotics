@@ -13,6 +13,51 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-20 00:05 — Run #2 cycle 3: capped-aux adopted, SC oracle+configs fixed, seat still the wall
+
+**Avg score (ab5 gauge, n=15 = 3 officials×3 + cfg_001×3 + cfg_005×3, 180 s):**
+adopted **capped-aux** (v2_auxprobe.pt + `AIC_GUARDED_AUX=1`) = **mean 28.0,
+IQM 35.8** vs baseline v2_wide **23.1** (n=15). IQM clears the +5 adoption gate
+(+14); the mean move (+4.9) is within the documented sim noise (sd 3–18). Honest
+decomposition (n=9 officials A/B, frozen action weights): guarded-descent alone
+−6.0, aux-uncapped −5.2, **aux-capped −0.1 vs bare** — the gauge gain is a
+*failure-mode swap on official_1* (mount collision → clean 0.05 m proximity, the
+−24 mode removed), surfacing in IQM, not broad improvement. Side results: SC
+teacher oracle repaired — after fixing a config bug (all 6 SC eval configs named
+a nonexistent port link → every SC trial scored ~1 for **any** policy since the
+suite was authored) it now seats **3/7** SC poses at ~93 with **0 contacts**
+(official_3, cfg_006, cfg_007). **0 insertions by the learned policy in ~120
+trials to date.**
+
+**What's missing:** (1) still the seat — a proximity-only gauge caps at ~43.5,
+so rung 40 has no margin without one insertion (a seat is tier-3 +53/trial ≈
++3.5 composite/trial). (2) The ab5 dead spot is **cfg_001** (rail0, SFP port_1,
+board_yaw +0.837; reaches only 0.18–0.26 m, one −23 collision) — it costs the
+composite **≈8.8 points**; ab5-minus-cfg_001 is already **36.8**. Note the
+separate PLAN_SCORE90 P2 band **cfg_000/004/008** (|yaw|∈[1.2,1.5], port_0,
+reached 0/9) is *not* in ab5 — both are approach/coverage holes fixable only by
+retraining the **action head** (the adopted ckpt is a frozen-encoder/frozen-head
+aux probe, so more demos into it change nothing). (3) The 4 blocked SC poses
+stall at exactly 0.01 m regardless of floor depth; the seat/block separator is
+**rail / board_x** (rail1 ≈0.20 seats; rail0/rail2 ≈0.15–0.18 block), i.e. a
+lateral waypoint-calibration bias, not depth — SC keep-rate 3/7 < the 5/8 P2 gate.
+
+**Next 4 h (04:00 D — dead-band coverage retrain, per two-agent critique):**
+generate forced-yaw dead-band configs (`gen_deadband.py`, yaw ∈ [−1.5,−1.2] to
+cover cfg_008 which the strata sampler misses; rails 0/1/2, port_0) **plus
+cfg_001's region** (rail0 port_1 +0.837, the ab5 blocker) → `collect_campaign.sh`
+(bags auto-deleted, resumable, keep score≥60 ∧ insertion≥1, ~8 min/demo) →
+**two-stage retrain**: full **unfrozen** action head warm-started from v2_wide
+with the PLAIN recipe (no wrench/tail-trim/pushin — those are the v3fix levers
+rejected at n=3) then a frozen 3-D aux probe (6-D rejected) → eval gate:
+cfg_000/004/008 + cfg_001 + official_1/official_3 at n=3, adopt **only** on ≥1
+new insertion AND no officials regression (pointer swap; v2_wide/v2_auxprobe
+never overwritten) → refresh the README demo video. SC excluded from tonight's
+retrain (shares the SFP cable; below gate). SOTA/methods considered: ACT
+(Zhao 2023, arXiv:2304.13705) receding-horizon backbone retained; MimicGen
+(Mandlekar 2023, arXiv:2310.17596) privileged-replay pattern for band coverage;
+residual-RL last-inch (arXiv:2509.19301) still deferred to post-Jul-28 P3.
+
 ## 2026-07-19 19:15 — Run #2 cycle 2: learned port bearing works (graze 3/3→1/3), seat still open
 
 **Avg score (n=9 officials per arm, 180 s):** blind-descent 29.8 → aux-bearing

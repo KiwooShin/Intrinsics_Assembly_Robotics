@@ -129,6 +129,23 @@ run_disasm_trial() {  # cfg tag rlog seed
   done
   [ $READY -eq 0 ] && echo "[disasm] ERROR: engine never became ready" && return 1
 
+  # Disable each port touch-latch for COLLECTION ONLY (latch diagnosis 2026-07-20):
+  # the upstream TouchPlugin welds the plug tip to the seat sensor plate after 1s of
+  # contact, which fires during the slow perturbed retract. It is a SCORING sensor, not
+  # needed for data-gen; the reversed episode's seat marker is geometric (reverse_disasm
+  # sets insertion_frame=N-1), so labeling is unaffected. This is a runtime gz-transport
+  # call that auto-reverts each run -- scoring worlds/assets are never edited. If the
+  # disable fails for any reason, the insertion_events>=1 gate still rejects a weld.
+  sleep 2
+  local nsvc=0 svc
+  for svc in $(gz service -l 2>/dev/null | grep -iE 'port.*/enable$'); do
+    if gz service -s "$svc" --reqtype gz.msgs.Boolean --reptype gz.msgs.Empty \
+         --timeout 2000 --req 'data: false' > /dev/null 2>&1; then
+      echo "[disasm] touch-latch disabled: $svc"; nsvc=$((nsvc+1))
+    fi
+  done
+  [ "$nsvc" -eq 0 ] && echo "[disasm] WARNING: no touch-latch enable service disabled (latch may still fire; gate will reject welds)"
+
   echo "[disasm] bag record -> $BPATH"
   ros2 bag record \
     /left_camera/image /center_camera/image /right_camera/image \

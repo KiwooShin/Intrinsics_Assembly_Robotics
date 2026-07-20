@@ -350,8 +350,11 @@ class DisassembleCode(CheatCode):
                 return None
             return entrance_pos - z * insertion_axis
 
-        # --- Phase 1: stage above the port, then descend to retract_start_z. No
-        # dwell -- the descent stops SHALLOW so continuous tip contact stays < 1 s. ---
+        # --- Phase 1: stage above the port, then descend GRADUALLY to retract_start_z
+        # (tracking z_offset -- no constant-target dwell). The 1 s touch-latch is
+        # disabled for collection (collect_disassembly.sh disables each port's
+        # TouchPlugin via its gz enable service), so a full slow perturbed retract is
+        # reversible; the reversed seat marker is geometric (reverse_disasm N-1). ---
         for t in range(0, 100):
             interp_fraction = t / 100.0
             try:
@@ -382,7 +385,13 @@ class DisassembleCode(CheatCode):
                         target_position_base=(
                             sc_stage_target(z_offset)
                             if is_sc
-                            else axis_target(0.0, 0.0, 0.0)
+                            # SFP: track z_offset so the tip descends GRADUALLY to
+                            # retract_start_z instead of being commanded straight to the
+                            # final depth and held there ~21 s (the old axis_target(0,0,0)
+                            # constant target caused the mid-descent weld). anchor sits at
+                            # retract_start_z and axis_out is +z, so axial_out = z_offset -
+                            # retract_start_z places the tip at height z_offset.
+                            else axis_target(z_offset - cfg.retract_start_z, 0.0, 0.0)
                         ),
                     ),
                 )
@@ -391,9 +400,10 @@ class DisassembleCode(CheatCode):
             self.sleep_for(0.05)
 
         # --- Phase 2: perturbed retract. Draw the per-episode schedule and command
-        # each waypoint OUTWARD along the port axis. Movement begins on the FIRST
-        # cycle at depth, so the tip is already receding: the 1 s touch latch (which
-        # resets on any contact break) never completes and the seat stays reversible. ---
+        # each waypoint OUTWARD along the port axis. The TouchPlugin latch is disabled
+        # for collection (see collect_disassembly.sh::run_disasm_trial), so the tip may
+        # dwell/recede through the seat plate without welding and the seat stays
+        # reversible. ---
         rng = np.random.default_rng(cfg.seed)
         cfg_ep = sched.sample_config(rng, cfg.n_steps, cfg.defaults)
         offsets = sched.build_schedule(cfg_ep)

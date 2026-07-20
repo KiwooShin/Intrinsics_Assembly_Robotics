@@ -239,7 +239,6 @@ for line in "${TASKS[@]}"; do
   # PORT_FRAME=... to force a specific frame if a bag has distractor ambiguity.
   # The target port name (e.g. sfp_port_0) disambiguates the mount's two entrance
   # frames; the /scoring/tf scoping alone does not narrow same-mount ports.
-  local PORT_NAME
   PORT_NAME=$(grep -m1 -E '^[[:space:]]*port_name:' "$CFG" | awk '{print $2}')
   "$PY" "$RELABEL" "$BAG" "$EP" \
       ${PORT_NAME:+--port-name "$PORT_NAME"} \

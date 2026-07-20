@@ -230,6 +230,21 @@ for line in "${TASKS[@]}"; do
   LATCHED=False
   [ "${INS:-0}" -ge 1 ] && LATCHED=True   # a seat fired -> the retract likely latched
 
+  # HARD GATE (verify-disasm-correctness workflow, 2026-07-20): a plug that tripped the
+  # irreversible 1s touch-latch DURING the ~21s descent must NOT be time-reversed into
+  # the dataset as a fake seat -- the one silent-corruption path. Reject it outright
+  # (do NOT reverse or keep). The TouchPlugin timer resets only on contact BREAK, so a
+  # sustained-contact descent (chiefly SC at -0.013, 3mm below its -0.010 seat floor)
+  # can weld mid-descent; SFP at -0.013 stays 2mm shallower than its -0.015 floor and is
+  # geometry-safe, but the gate applies to both for defense in depth.
+  if [ "$LATCHED" = "True" ]; then
+    echo "[disasm]   FAIL_LATCHED $EPDIR insertion_events=${INS:-0} (welded mid-descent; rejected, not reversed)"
+    rm -rf "$EP" "$RAW"
+    [ -z "$KEEP_BAG" ] && rm -rf "$BAG"
+    log_row "$TS" "$CFG" "$STRATUM" "$TPLUG" "$REP" "$EPDIR" "${FRAMES:-}" "${INS:-0}" "True" "$wall" "FAIL_LATCHED"
+    fail=$((fail+1)); continue
+  fi
+
   if [ "$conv_rc" -eq 0 ] && [ -f "$RAW/tcp_velocities.npy" ]; then
     "$PY" "$REVERSE" "$RAW" "$EP" > "${DLOG}.reverse" 2>&1
     rev_rc=$?
@@ -238,9 +253,8 @@ for line in "${TASKS[@]}"; do
   fi
 
   if [ "${rev_rc:-1}" -eq 0 ] && [ -f "$EP/tcp_velocities.npy" ] && [ -f "$EP/insertion_frame.npy" ]; then
-    STATUS=KEEP
-    [ "$LATCHED" = "True" ] && STATUS=KEEP_LATCH_WARN
-    echo "[disasm]   $STATUS $EPDIR frames=${FRAMES:-?} insertion_events=${INS:-0} latched=$LATCHED wall=${wall}s"
+    STATUS=KEEP   # latched episodes are already rejected above -> this is a clean seat-free retract
+    echo "[disasm]   $STATUS $EPDIR frames=${FRAMES:-?} insertion_events=${INS:-0} wall=${wall}s"
     log_row "$TS" "$CFG" "$STRATUM" "$TPLUG" "$REP" "$EPDIR" "${FRAMES:-}" "${INS:-0}" "$LATCHED" "$wall" "$STATUS"
     keep=$((keep+1))
   else

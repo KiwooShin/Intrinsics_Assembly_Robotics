@@ -112,6 +112,13 @@ run_deploy_trial() {  # cfg tag rlog
   ros2 run rmw_zenoh_cpp rmw_zenohd > /dev/null 2>&1 &
   sleep 8
 
+  # Per-trial scoring dir so we can detect completion by the scoring.yaml the
+  # engine always writes at trial end (the deploy policy does NOT emit CheatCode's
+  # "All Tasks Completed" line, so a marker-only wait hangs until timeout).
+  local SCORE_DIR="$BPATH.scoring"
+  mkdir -p "$SCORE_DIR"
+  export AIC_RESULTS_DIR="$SCORE_DIR"
+
   echo "[dagger] launching sim (ground_truth) cfg=$CONFIG"
   ros2 launch aic_bringup aic_gz_bringup.launch.py \
     aic_engine_config_file:="$CONFIG" \
@@ -146,7 +153,10 @@ run_deploy_trial() {  # cfg tag rlog
   local DONE=0
   for i in $(seq 1 72); do
     sleep 10
-    if grep -qE "All Tasks Completed for trial 'trial_1'|completed successfully! Score:|Finished scoring trial" "$RLOG" 2>/dev/null; then
+    # Primary: the engine wrote scoring.yaml (fires for seat OR non-seat, deploy
+    # or oracle). Secondary: the legacy CheatCode completion markers.
+    if [ -f "$SCORE_DIR/scoring.yaml" ] || \
+       grep -qE "All Tasks Completed for trial 'trial_1'|completed successfully! Score:|Finished scoring trial|Engine Stopped" "$RLOG" 2>/dev/null; then
       DONE=1; echo "[dagger] trial complete after ~$((i*10))s"; break
     fi
   done

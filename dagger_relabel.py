@@ -80,6 +80,13 @@ DEFAULT_FALLBACK_FRAMES: int = 24
 ENTRANCE_SUFFIX: str = "_link_entrance"
 # Default base frame the label is expressed relative to (matches tcp_poses.npy).
 DEFAULT_BASE_FRAME: str = "base_link"
+# The robot TF tree is rooted at ``world`` (robot_state_publisher) while the
+# scoring/scene TF tree (task board, ports, cable) is rooted at ``aic_world``
+# (the Gazebo world). Both name the same physical origin -- verified empirically:
+# the gripper-welded plug (under aic_world) sits at the grasp offset from the TCP
+# (under world). So the two roots are treated as identity-equal to bridge the
+# otherwise-disconnected trees when resolving base_link -> port.
+WORLD_ALIASES: frozenset[str] = frozenset({"world", "aic_world"})
 
 # On-disk artifacts written into each emitted episode dir.
 PORT_TARGET_NAME: str = "port_target.npy"  # (3,) true port position in base_link
@@ -302,9 +309,16 @@ class TransformForest:
         target_set = set(target_chain)
         lca: str | None = next((f for f in source_chain if f in target_set), None)
         if lca is None:
+            # The robot (world) and scene (aic_world) trees are disconnected but
+            # share the same physical origin; bridge their roots with identity.
+            target_root, source_root = target_chain[-1], source_chain[-1]
+            if target_root in WORLD_ALIASES and source_root in WORLD_ALIASES:
+                t_root_from_source = self._transform_up_to(source_frame, source_root)
+                t_root_from_target = self._transform_up_to(target_frame, target_root)
+                return invert_homogeneous(t_root_from_target) @ t_root_from_source
             raise ValueError(
                 f"{target_frame!r} and {source_frame!r} have no common ancestor "
-                f"(roots {target_chain[-1]!r} vs {source_chain[-1]!r})"
+                f"(roots {target_root!r} vs {source_root!r})"
             )
         t_lca_from_source = self._transform_up_to(source_frame, lca)
         t_lca_from_target = self._transform_up_to(target_frame, lca)

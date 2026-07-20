@@ -98,6 +98,28 @@ class TestTransformForest(unittest.TestCase):
         with self.assertRaises(ValueError):
             f.resolve("base_link", "no_such_frame")
 
+    def test_world_aic_world_identity_bridge(self) -> None:
+        # Robot tree rooted at 'world', scene tree rooted at 'aic_world' (same
+        # physical origin) -> resolve across the disconnected roots via identity.
+        f = dr.TransformForest()
+        f.add_transform("world", "base_link", [0.1, 0.2, 0.3], _yaw_quat(0.5))
+        f.add_transform("aic_world", "board", [0.4, 0.1, 1.14], [0, 0, 0, 1])
+        f.add_transform("board", "port_link_entrance", [0.05, -0.02, 0.0], [0, 0, 0, 1])
+        pos = f.position_of("base_link", "port_link_entrance")
+        world_port = np.array([0.45, 0.08, 1.14])  # port in aic_world == world
+        expected = port_offset.rotate_vector_by_quat_inverse(
+            _yaw_quat(0.5), world_port - np.array([0.1, 0.2, 0.3])
+        )
+        np.testing.assert_allclose(pos, expected, atol=1e-12)
+
+    def test_truly_disconnected_roots_still_raise(self) -> None:
+        # Non-world-alias disconnected roots must still error (no silent bridge).
+        f = dr.TransformForest()
+        f.add_transform("world", "base_link", [0.1, 0.0, 0.0], [0, 0, 0, 1])
+        f.add_transform("other_root", "thing", [0.4, 0.1, 1.14], [0, 0, 0, 1])
+        with self.assertRaises(ValueError):
+            f.resolve("base_link", "thing")
+
     def test_disconnected_trees_raise(self) -> None:
         f = dr.TransformForest()
         f.add_transform("world_a", "base_link", np.zeros(3), [0, 0, 0, 1])

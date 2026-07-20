@@ -785,3 +785,21 @@ capped-aux composite ≈25.0 vs baseline 23.1 (within noise); planning agent's
 key scope note: ab5 officials are RECONSTRUCTED harder poses — the 119.4
 true-official reference needs its own aux-guard run before any submission call
 (by ~Jul 24; phase_1 port by Jul 26-27).
+
+## 2026-07-19 22:50 — SC oracle repair arc + SC config discovery (run #2 evening)
+
+| Experiment | Verdict | Key metrics |
+|---|---|---|
+| F2: 6-D aux probe (officials ×3) | FAIL — rejected | 0/9 seats; off1 32.8 / off2 41.3 / off3 27.7 (off3 regressed vs capped 33.8); graze 1/9 |
+| B: stratified completion (cfg_001+cfg_005 ×3, capped-aux) | ADOPTED | ab5 composite mean 28.0, IQM 35.8 vs baseline 23.1 (IQM +14 > +5 gate); cfg_005 40.0 mean; cfg_001 dead (−7.0) |
+| C: SC oracle repair (floor −0.007 + pose waypoint) | PASS on officials | official_3 (SC) 93.5 SEAT contacts 0; official_1 (SFP regression) 93.2 SEAT; 167 unit tests |
+| SC config audit | 6/6 broken → FIXED | port_name was module name → frame sc_port_N/sc_port_N_link nonexistent; every SC cfg trial ever scored ~1 for ANY policy; fixed to sc_port_base |
+| Reval on fixed SC cfgs (−0.007) | PARTIAL | 2 seats (official_3, cfg_007 — both sc_port_1), 4 partials + 1 near-miss all exactly 0.01 m short (sc_port_0 poses), 0 contacts 7/7 |
+| Floor micro-tune −0.007 → −0.010 | RUNNING | reval2 batch (6 cfgs + official_3 regression), results/sc_oracle_reval2, done ~23:40 |
+
+Notes: keep-rate at −0.007 = 2/7 vs P2 gate 5/8; the uniform 0.01 m under-reach on
+sc_port_0-module poses motivated the one allowed floor iteration. The SC config fix
+invalidates all historical SC-stratum scores in eval_suite_smoke baselines (they were
+structurally unwinnable); ab5 ladder gauge unaffected (no SC cfgs). Deploy default is
+now capped-aux (v2_auxprobe.pt + AIC_GUARDED_AUX=1). guarded_trace.log CWD bug
+confirmed (writes repo root; gitignored) — code fix scheduled 00:00 cycle.

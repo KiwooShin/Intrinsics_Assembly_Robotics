@@ -923,3 +923,29 @@ agent's 15–61 mm deployment measurement — so aux-centering is a hypothesis t
 test, not a certainty; the enlarged spiral is the more direct lever for official_2.
 Infra: a mid-probe kill left stale model nodes → whole-batch "model not ready"
 failures; fixed by full teardown + letting probes exit naturally (REPS-bounded).
+
+## 2026-07-20 05:40 — Cycle 6: DECISION — kill scripted search, pivot to privileged-DAgger localization
+
+| Analysis | Verdict |
+|---|---|
+| Physics (search viability) | NO-GO. r18 radius 18mm > official_2 offset 13mm → 0/3 seats (falsifies coverage). Friction wall: K_eff~350N/m → ~4.4N lateral vs μN~4.4N (μ0.44) → creep-and-stall; spiral pitch 9mm ≫ 2mm bore; official_3 plunges beside port (never contacts). Localization (not the primitive) is the whole gap. |
+| Architecture (ROI) | D = bank C (capped-aux IQM 35.8 → Track-S submission floor) NOW + one B thrust (privileged-DAgger localization). Kill A (scripted search). |
+
+**Root cause (final):** seat = pure lateral targeting; plug reaches mouth plane
+(depth solved) but 13–61mm off a 1–2.5mm bore; no deploy-legal sensor localizes the
+port to mm (aux 0.86cm val → 15–61mm deploy = covariate shift; vision occluded; port
+TF eval-illegal). Same impedance gains seat for the oracle (true TF) → controller is
+fine, target is missing.
+
+**Plan (D):** (1) Track-S floor = adopted capped-aux, port phase_1 + containerize
+(user portal/Docker). (2) Seat shot = privileged-DAgger: deploy-policy rollout in
+ground_truth env → snapshot (RGB+TCP+wrench at stall) → label true port offset
+(portTF−TCP) → retrain localization head on the policy's own stall distribution →
+one-shot spiral re-center. Mostly offline (1 detached data-gen + retrain). Kill: >10mm
+held-out localization error → ship C only; no seat by Jul 26 → freeze, insertion→P3.
+
+Killed: AIC_SEARCH radius/z-step/turns tuning as a seating solution (PLAN_SCORE90
+"primitive can't seat in ~1 day → escalate to learned" criterion fired). Gentle-push
+variant NOT run (physics: single-pose lottery, no localization value). Scripted search
+primitives (SearchDescent, AIC_SEARCH*) remain in-tree, env-gated OFF, as downstream
+insurance under a good target.

@@ -13,6 +13,46 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-20 05:40 — Run #2 cycle 6: scripted search KILLED, pivot to learned localization (DAgger)
+
+**Avg score (search probes):** official_2 ~43 (3/3), official_3 ~29, cfg_005 ~10;
+**still 0 insertions in ~165 trials.** Decision cycle (2 analysis agents, physics +
+architecture): **stop tuning the scripted spiral search — it cannot seat here.** The
+r18 probe set the spiral radius to **18 mm, above official_2's measured 13 mm
+offset, and still seated 0/3** — that falsifies the "search coverage" hypothesis.
+
+**What's missing (root cause, quantified):** the seat is a **deploy-time port-
+localization** problem, not a seating-primitive problem. Depth/push/axis are all
+solved (plug reaches the mouth plane, decisive push, vertical axis confirmed); the
+residual is **pure lateral 13 mm (official_2) to 26–61 mm (official_3) against a
+1–2.5 mm bore**. The blind spiral fails on three walls: (1) **friction** — from the
+traces K_eff ≈ 350 N/m gives only ~4.4 N lateral authority vs μ·N at N≈10 N (μ≈0.44),
+so the tip creeps ~5 of 18 mm commanded and stalls; pushing harder raises the same
+normal force (12 N back-off caps it) — unwinnable; (2) **resolution** — a 2-turn/18 mm
+spiral has 9 mm loop pitch ≫ the 2 mm bore; guaranteeing overlap needs ~9 turns =
+time-prohibitive at 0.05× RTF; (3) **out of range** — official_3 plunges 32–40 mm
+*beside* the port (never contacts). And no primitive can localize: aux val 0.86 cm →
+**15–61 mm in deployment** (covariate shift), vision occluded at the last inch, port
+TF eval-illegal. Same impedance gains seat perfectly for the oracle (it has the true
+TF) → the whole gap is the target, not the controller.
+
+**Next 4 h (decision = D):** (1) **Bank the floor** — the adopted capped-aux config
+(ab5 IQM 35.8 vs 23.1, officials proximity) is the guaranteed Track-S submission;
+port to phase_1 + containerize (flagged to user; needs portal/Docker). (2) **Privileged-
+DAgger localization** (the seat shot, = the user's learned all-sensor directive):
+roll the deploy policy to its stall in a `ground_truth:=true` collection env, snapshot
+eval-legal obs (RGB+TCP+wrench) → label with the oracle's **true port offset**
+(port TF − TCP), retrain the localization head on the policy's *own* stall
+distribution (fixes the covariate shift that makes aux non-transfer; regresses the
+offset so it generalizes across 13–61 mm), wire as a one-shot spiral re-center
+(`AIC_SEARCH_AUX` seam). Mostly offline: one detached sim data-gen pass + offline
+retrain. **Kill-criteria:** held-out deploy-stall localization error > ~10 mm after
+retrain → occluded sensing lacks the info, ship capped-aux only; no insertion by
+Jul 26 → freeze + ship, insertion → Track-L P3 (residual RL). A seat is +53/trial
+(≈+3.5 ab5/trial) — the only path to avg>90. SOTA: privileged→student DAgger
+(2606.10385), extrinsic-contact localization; the oracle last-inch is pure vertical
+(lat/vert 0.014) so plain BC can't clone the correction — DAgger *computes* the label.
+
 ## 2026-07-20 04:30 — Run #2 cycle 5: seat wall localized — it's LATERAL, depth is solved
 
 **Avg score (search probes, officials, AIC_SEARCH):** official_2 ~42.8, official_3

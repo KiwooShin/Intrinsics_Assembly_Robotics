@@ -991,3 +991,33 @@ localization error from seating capability. First seat expected on SFP (13mm), n
 Refs: AutoMate 2407.08028, InsertionNet 2104.14223 / 2.0 2203.01153, IndustReal
 2305.17110, seam-fill 2204.07776, tactile-from-disassembly 2604.20712, IL peg 2210.01340.
 Still 0 seats; capped-aux IQM 35.8 banked. No code changed this cycle (docs only).
+
+## 2026-07-20 15:10 — Run #3: LOCALIZATION GATE RESOLVED = FAIL (decision numbers in)
+
+DAgger collection complete: 41 eps (35 SFP / 6 SC), 7 benign TF-latch-race drops
+(sim-uptime degradation on r2/r3, cleanly rejected, coverage intact via clean r0/r1).
+Retrain: frozen-encoder aux head (init v2_wide, 29 SFP train / 6 SFP+6 SC holdout),
+60 epochs in 60s. eval_localization SFP and SC SEPARATELY (GPU), near-port 30mm:
+
+| Holdout | n eps | median lateral | median 3D | last-frame stall err (median) | GATE (~2-5mm) |
+| ------- | ----- | -------------- | --------- | ----------------------------- | ------------- |
+| SFP     | 6     | 36.9mm         | 38.1mm    | ~40mm (1/6 < 10mm)            | FAIL          |
+| SC      | 6     | 201mm          | 219mm     | ~200mm (pred z0.18 vs true 0.03) | FAIL       |
+
+Interpretation: the occluded deploy-STALL RGB lacks the information to localize the
+port to seatable precision even after DAgger covariate correction. SFP head (trained
+on 29 SFP deploy-stall eps) still ~40mm median AT THE STALL POINT (the operative
+re-center frame); only 1/6 SFP eps reached ~10mm. SC 200mm is inflated by held-out-
+entirely (0 SC in train -> head places SC ports at SFP height), but SFP alone fails,
+so leave-one-SC-out won't change the strategic call. Confirms the standing covariate-
+shift + occlusion hypothesis and the 12:00 analysis (real gate = capture radius, and
+40mm is far outside it; localization can't even serve as a coarse aim).
+
+CONSEQUENCE: localization is DEAD as a re-centering front-end. Half the kill criterion
+met (loc >> capture radius). First seat now rests ENTIRELY on the disassembly-reversal
+FORCE-REACTIVE specialist (seats on wrench, sidesteps occlusion) = the sharpened plan's
+primary path. Proceeding: disasm-correctness verify (workflow) -> disasm collection ->
+specialist (wrench ablation) -> disasm-standalone FIRST-SEAT test on aligned poses.
+Only if that ALSO yields 0 seats does the full kill fire (ship capped-aux IQM 35.8).
+Refs: covariate-shift DAgger (2606.10385), seam-fill capture-radius 2204.07776,
+AutoMate 2407.08028. Still 0 seats; capped-aux IQM 35.8 banked.

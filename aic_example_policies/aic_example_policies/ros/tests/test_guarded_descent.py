@@ -15,9 +15,11 @@ Run with::
 
 from __future__ import annotations
 
+import os
 import pathlib
 import tempfile
 import unittest
+import unittest.mock
 
 import numpy as np
 
@@ -809,6 +811,39 @@ class GuardedTraceWriterTest(unittest.TestCase):
     def test_default_filename(self) -> None:
         """The default destination is guarded_trace.log."""
         self.assertEqual(GuardedTraceWriter().path.name, "guarded_trace.log")
+
+    def test_default_honors_trace_dir_env(self) -> None:
+        """AIC_GUARDED_TRACE_DIR redirects the default path per trial."""
+        with tempfile.TemporaryDirectory() as d:
+            with unittest.mock.patch.dict(
+                os.environ, {"AIC_GUARDED_TRACE_DIR": d}
+            ):
+                writer = GuardedTraceWriter()
+            self.assertEqual(
+                writer.path, pathlib.Path(d) / "guarded_trace.log"
+            )
+            writer.write_lines(["[guarded] HANDOFF ..."])
+            self.assertTrue(
+                (pathlib.Path(d) / "guarded_trace.log").is_file()
+            )
+
+    def test_blank_trace_dir_env_falls_back_to_cwd(self) -> None:
+        """A blank AIC_GUARDED_TRACE_DIR behaves like an unset one."""
+        with unittest.mock.patch.dict(
+            os.environ, {"AIC_GUARDED_TRACE_DIR": "  "}
+        ):
+            writer = GuardedTraceWriter()
+        self.assertEqual(writer.path, pathlib.Path("guarded_trace.log"))
+
+    def test_explicit_path_ignores_env(self) -> None:
+        """An explicit path wins over the environment variable."""
+        with tempfile.TemporaryDirectory() as d:
+            explicit = pathlib.Path(d) / "custom.log"
+            with unittest.mock.patch.dict(
+                os.environ, {"AIC_GUARDED_TRACE_DIR": "/nonexistent"}
+            ):
+                writer = GuardedTraceWriter(explicit)
+            self.assertEqual(writer.path, explicit)
 
 
 if __name__ == "__main__":

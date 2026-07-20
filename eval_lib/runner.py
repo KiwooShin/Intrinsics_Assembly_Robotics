@@ -370,6 +370,9 @@ export GZ_RENDERING_PLUGIN_PATH={env.gz_rendering_plugin_path}
 export __EGL_VENDOR_LIBRARY_FILENAMES={env.egl_vendor_library_filenames}
 export DISPLAY={env.display}
 export AIC_RESULTS_DIR={results_dir}
+# Per-trial guarded-descent telemetry target: without this the policy node's
+# GuardedTraceWriter falls back to its CWD (the repo root), interleaving trials.
+export AIC_GUARDED_TRACE_DIR={results_dir}
 mkdir -p "{results_dir}"
 
 # Process-group-scoped teardown (WEDGE-DEBUG 2026-07-18 fratricide fix).

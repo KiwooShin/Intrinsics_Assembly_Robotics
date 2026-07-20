@@ -1167,14 +1167,24 @@ class GuardedTraceWriter:
     stray empty file is created).
     """
 
-    def __init__(self, path: str | os.PathLike[str] = DEFAULT_TRACE_FILENAME) -> None:
+    def __init__(self, path: str | os.PathLike[str] | None = None) -> None:
         """Initialize the writer.
 
         Args:
-            path: Destination file; defaults to ``guarded_trace.log`` in the
-                process CWD (the per-trial directory at runtime).
+            path: Destination file. When ``None``, the file is
+                ``guarded_trace.log`` inside ``AIC_GUARDED_TRACE_DIR`` if that
+                environment variable is set (the eval runner exports the
+                per-trial directory), else the process CWD. The 2026-07-19
+                batches showed the policy node's CWD is the repo root, not the
+                trial directory, so the CWD fallback interleaves trials into
+                one file -- always prefer the env var in eval runs.
         """
-        self.path = pathlib.Path(path)
+        if path is None:
+            trace_dir = os.environ.get("AIC_GUARDED_TRACE_DIR", "").strip()
+            base = pathlib.Path(trace_dir) if trace_dir else pathlib.Path()
+            self.path = base / DEFAULT_TRACE_FILENAME
+        else:
+            self.path = pathlib.Path(path)
 
     def write_lines(self, lines: Iterable[str]) -> int:
         """Append log lines to the trace file, one per line.

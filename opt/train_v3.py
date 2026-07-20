@@ -151,6 +151,37 @@ def _expand_globs(spec: str) -> list[str]:
     return uniq
 
 
+def _load_seat_indices(dirs: list[str]) -> list[int]:
+    """Load each episode's persisted seat frame index (``insertion_frame.npy``).
+
+    Reads the small per-episode seat marker written by ``prepare_dataset`` (code
+    change #3) so the last-inch window can end at the exact seat frame. This is a
+    lightweight scalar ``np.load`` per directory (not the heavy image I/O of
+    ``train_v2.load_all``); episodes without the file (older datasets) map to
+    ``-1``, which :func:`episode_prep.last_inch_window` treats as "fall back to
+    the speed-derived end".
+
+    Args:
+        dirs: Episode directories, in the same order ``train_v2.load_all`` loads
+            them (so the returned list aligns positionally with those episodes).
+
+    Returns:
+        A list of per-episode seat frame indices (``int``), ``-1`` where absent
+        or unreadable.
+    """
+    out: list[int] = []
+    for d in dirs:
+        path = pathlib.Path(d) / "insertion_frame.npy"
+        seat = -1
+        if path.exists():
+            try:
+                seat = int(np.load(path))
+            except (ValueError, OSError) as exc:  # unreadable -> speed-derived end
+                _LOG.warning("unreadable %s (%s); using speed-derived seat.", path, exc)
+        out.append(seat)
+    return out
+
+
 def build_optimizer(
     model: torch.nn.Module,
     lr: float,
@@ -199,11 +230,16 @@ def _load_split(
     Reuses ``train_v2.load_all`` for the (heavy) GPU image/state/action loading,
     then optionally: concatenates the 6-D wrench onto the state (``cfg.use_wrench``
     -> 13-D), trims each episode's seated zero-velocity tail, and computes per-frame
-    push-in loss weights. Trimming/weighting are applied only to the training split
-    (``apply_prep``); the validation split keeps every frame so its diagnostic
-    metric stays comparable across runs. With every flag off the returned tensors
-    are exactly ``load_all``'s output, ``weights`` is ``None`` and the two aux
-    tensors are ``None`` (legacy path).
+    push-in loss weights. When ``cfg.last_inch_enabled`` the *inverse* selection is
+    applied instead of tail-trim: only each demo's terminal approach->seat window
+    is kept (using the exact ``insertion_frame.npy`` seat marker where present,
+    else the speed-derived end) and the long lead-in is dropped, for an insertion
+    specialist (mutually exclusive with ``tail_trim``). Trimming/last-inch/
+    weighting are applied only to the training split (``apply_prep``); the
+    validation split keeps every frame so its diagnostic metric stays comparable
+    across runs. With every flag off the returned tensors are exactly
+    ``load_all``'s output, ``weights`` is ``None`` and the two aux tensors are
+    ``None`` (legacy path).
 
     When ``cfg.port_aux`` is set the hindsight port-offset labels + validity mask
     are built (in base_link, un-normalized, meters) from the *full* episode
@@ -259,7 +295,37 @@ def _load_split(
         valid = torch.from_numpy(label_set.valid).to(imgs.device)
 
     weights: torch.Tensor | None = None
-    if apply_prep and (cfg.tail_trim or cfg.pushin_enabled):
+    if apply_prep and cfg.last_inch_enabled:
+        # Last-inch specialist: keep ONLY each demo's terminal approach->seat
+        # window (the inverse of tail-trim) and drop the long lead-in. Mutually
+        # exclusive with tail_trim (TrainConfig validates this).
+        lookback = episode_prep.seconds_to_frames(cfg.last_inch_s, cfg.dt_frame)
+        ramp = episode_prep.seconds_to_frames(cfg.pushin_ramp_s, cfg.dt_frame)
+        epid_np = epid.detach().cpu().numpy()
+        vel_np = act[:, 0].detach().cpu().float().numpy()
+        # Exact seat marker per episode where persisted; -1 -> speed-derived end.
+        # epid values are dir indices, so map per-dir markers to block order.
+        seat_by_dir = _load_seat_indices(dirs)
+        seat_list = [
+            seat_by_dir[int(epid_np[s])]
+            for s, _ in episode_prep.episode_bounds(epid_np)
+        ]
+        keep_np, w_np = episode_prep.build_last_inch_keep_and_weights(
+            epid_np, vel_np,
+            thr=cfg.tail_trim_threshold,
+            min_frames=cfg.last_inch_min_frames,
+            lookback_frames=lookback,
+            pushin_ramp_frames=ramp,
+            pushin_weight=cfg.pushin_weight,
+            seat_indices=seat_list,
+        )
+        keep = torch.from_numpy(keep_np).to(imgs.device)
+        imgs, state, act = imgs[keep], state[keep], act[keep]
+        if offsets is not None:
+            offsets, valid = offsets[keep], valid[keep]
+        if cfg.pushin_enabled:
+            weights = torch.from_numpy(w_np[keep_np]).to(state.device)
+    elif apply_prep and (cfg.tail_trim or cfg.pushin_enabled):
         margin = episode_prep.seconds_to_frames(
             cfg.tail_trim_margin_s, cfg.dt_frame, minimum=0
         )
@@ -615,6 +681,12 @@ def _parse_args(argv: list[str] | None = None) -> TrainConfig:
     ap.add_argument("--tail-trim-margin-s", type=float,
                     default=TrainConfig.tail_trim_margin_s,
                     help="Seconds of frames kept after the last moving frame.")
+    ap.add_argument("--last-inch-s", type=float, default=TrainConfig.last_inch_s,
+                    help="Keep only each demo's terminal approach->seat window of "
+                         "this many seconds (inverse of --tail-trim; 0=off).")
+    ap.add_argument("--last-inch-min-frames", type=int,
+                    default=TrainConfig.last_inch_min_frames,
+                    help="Minimum frames kept in each last-inch window (>=1).")
     ap.add_argument("--wrench", dest="use_wrench", action="store_true",
                     help="Append the 6-D wrist wrench to the state (7-D -> 13-D).")
     ap.add_argument("--pushin-weight", type=float, default=TrainConfig.pushin_weight,
@@ -647,7 +719,8 @@ def _parse_args(argv: list[str] | None = None) -> TrainConfig:
         compile_mode=a.compile_mode, fused_adam=a.fused_adam, use_fp8=a.use_fp8,
         seed=a.seed, out=a.out, shift_pad=a.shift_pad, proprio_dropout=a.proprio_dropout,
         tail_trim=a.tail_trim, tail_trim_threshold=a.tail_trim_threshold,
-        tail_trim_margin_s=a.tail_trim_margin_s, use_wrench=a.use_wrench,
+        tail_trim_margin_s=a.tail_trim_margin_s, last_inch_s=a.last_inch_s,
+        last_inch_min_frames=a.last_inch_min_frames, use_wrench=a.use_wrench,
         pushin_weight=a.pushin_weight, pushin_ramp_s=a.pushin_ramp_s, dt_frame=a.dt_frame,
         port_aux=a.port_aux, aux_dim=a.aux_dim, aux_weight=a.aux_weight,
         aux_frame=a.aux_frame, aux_freeze_encoder=a.aux_freeze_encoder,
@@ -666,7 +739,8 @@ def main(argv: list[str] | None = None) -> None:
     )
     print(
         f"[train_v3] fixes: tail_trim={cfg.tail_trim}(thr={cfg.tail_trim_threshold} "
-        f"margin={cfg.tail_trim_margin_s}s) state_dim={cfg.state_dim} "
+        f"margin={cfg.tail_trim_margin_s}s) last_inch_s={cfg.last_inch_s}"
+        f"(min={cfg.last_inch_min_frames}) state_dim={cfg.state_dim} "
         f"pushin_W={cfg.pushin_weight}(ramp={cfg.pushin_ramp_s}s) shift_pad={cfg.shift_pad}"
     )
     print(

@@ -119,6 +119,31 @@ class TrainConfigTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             config.TrainConfig(near_port_m=0.0)
 
+    def test_last_inch_defaults_off(self) -> None:
+        c = config.TrainConfig()
+        self.assertEqual(c.last_inch_s, 0.0)
+        self.assertFalse(c.last_inch_enabled)
+        self.assertEqual(c.last_inch_min_frames, 8)
+
+    def test_last_inch_enabled_property(self) -> None:
+        self.assertTrue(config.TrainConfig(last_inch_s=2.0).last_inch_enabled)
+        self.assertFalse(config.TrainConfig(last_inch_s=0.0).last_inch_enabled)
+
+    def test_bad_last_inch_s(self) -> None:
+        with self.assertRaises(ValueError):
+            config.TrainConfig(last_inch_s=-0.1)
+
+    def test_bad_last_inch_min_frames(self) -> None:
+        with self.assertRaises(ValueError):
+            config.TrainConfig(last_inch_min_frames=0)
+
+    def test_last_inch_and_tail_trim_mutually_exclusive(self) -> None:
+        with self.assertRaises(ValueError):
+            config.TrainConfig(last_inch_s=2.0, tail_trim=True)
+        # Each alone is fine.
+        config.TrainConfig(last_inch_s=2.0)
+        config.TrainConfig(tail_trim=True)
+
 
 class ResultRecordsTest(unittest.TestCase):
     """Result dataclasses expose the expected derived fields."""

@@ -153,6 +153,46 @@ class ArgParseTest(unittest.TestCase):
         self.assertTrue(cfg.pushin_enabled)
         self.assertEqual(cfg.shift_pad, 6)
 
+    def test_last_inch_off_by_default(self) -> None:
+        cfg = train_v3._parse_args(["--epochs", "1"])
+        self.assertEqual(cfg.last_inch_s, 0.0)
+        self.assertFalse(cfg.last_inch_enabled)
+
+    def test_last_inch_flags(self) -> None:
+        cfg = train_v3._parse_args([
+            "--epochs", "1", "--last-inch-s", "2.5", "--last-inch-min-frames", "12",
+        ])
+        self.assertEqual(cfg.last_inch_s, 2.5)
+        self.assertTrue(cfg.last_inch_enabled)
+        self.assertEqual(cfg.last_inch_min_frames, 12)
+
+
+@unittest.skipUnless(_HAS_TORCH, "torch not available")
+class LoadSeatIndicesTest(unittest.TestCase):
+    """_load_seat_indices reads the persisted marker (CPU-only, no CUDA)."""
+
+    def test_missing_file_maps_to_minus_one(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(train_v3._load_seat_indices([d]), [-1])
+
+    def test_reads_scalar_marker_in_dir_order(self) -> None:
+        import tempfile
+
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as root:
+            import os
+
+            d0, d1, d2 = (os.path.join(root, f"ep_{i}") for i in range(3))
+            for p in (d0, d1, d2):
+                os.makedirs(p)
+            np.save(os.path.join(d0, "insertion_frame.npy"), np.asarray(42, np.int64))
+            # d1 has no marker -> -1
+            np.save(os.path.join(d2, "insertion_frame.npy"), np.asarray(-1, np.int64))
+            self.assertEqual(train_v3._load_seat_indices([d0, d1, d2]), [42, -1, -1])
+
 
 @unittest.skipUnless(_HAS_TORCH, "torch not available")
 class AuxHeadRegressionTest(unittest.TestCase):

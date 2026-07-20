@@ -50,9 +50,20 @@ class TrainConfig:
             sequence (non-destructive; the ``.npy`` files are never rewritten).
             Removes frames that alias the near-port approach. Off = legacy path.
         tail_trim_threshold: Linear-speed threshold (m/s) below which a trailing
-            frame is treated as "stopped" for :func:`terminal_tail_trim_length`.
+            frame is treated as "stopped". Shared by both
+            :func:`terminal_tail_trim_length` (tail trim) and
+            :func:`last_inch_window` (the speed-derived last-inch window end).
         tail_trim_margin_s: Seconds of frames kept after the last moving frame,
             so a short "arrived" cue survives the trim.
+        last_inch_s: Last-inch lookback window in seconds. When > 0 the trainer
+            keeps ONLY each demo's terminal approach->seat window (the inverse of
+            ``tail_trim``) and drops the long lead-in, for an insertion
+            specialist (INSERTION_PLAN.md P-INSERT-1). ``0.0`` = off (legacy
+            path). Mutually exclusive with ``tail_trim``. Uses the exact
+            ``insertion_frame.npy`` seat marker per episode when present, else the
+            speed-derived end.
+        last_inch_min_frames: Minimum frames kept in each last-inch window (>= 1),
+            so short demos still yield a usable window.
         use_wrench: Concatenate the 6-D wrist wrench onto the 7-D TCP state,
             training a 13-D-state policy. The checkpoint records ``state_dim`` so
             DeployACT can append the live wrench. Off = 7-D legacy state.
@@ -105,6 +116,8 @@ class TrainConfig:
     tail_trim: bool = False
     tail_trim_threshold: float = 0.003
     tail_trim_margin_s: float = 0.3
+    last_inch_s: float = 0.0
+    last_inch_min_frames: int = 8
     use_wrench: bool = False
     pushin_weight: float = 1.0
     pushin_ramp_s: float = 2.0
@@ -150,6 +163,17 @@ class TrainConfig:
             raise ValueError(
                 f"tail_trim_margin_s must be >= 0, got {self.tail_trim_margin_s}"
             )
+        if self.last_inch_s < 0.0:
+            raise ValueError(f"last_inch_s must be >= 0, got {self.last_inch_s}")
+        if self.last_inch_min_frames < 1:
+            raise ValueError(
+                f"last_inch_min_frames must be >= 1, got {self.last_inch_min_frames}"
+            )
+        if self.last_inch_s > 0.0 and self.tail_trim:
+            raise ValueError(
+                "last_inch_s and tail_trim are mutually exclusive (last-inch keeps "
+                "the terminal window; tail_trim drops it)"
+            )
         if self.pushin_weight < 1.0:
             raise ValueError(f"pushin_weight must be >= 1, got {self.pushin_weight}")
         if self.pushin_ramp_s < 0.0:
@@ -179,6 +203,11 @@ class TrainConfig:
     def pushin_enabled(self) -> bool:
         """Whether push-in loss weighting is active (peak weight > 1)."""
         return self.pushin_weight > 1.0
+
+    @property
+    def last_inch_enabled(self) -> bool:
+        """Whether last-inch terminal-window selection is active (lookback > 0)."""
+        return self.last_inch_s > 0.0
 
     @property
     def port_aux_enabled(self) -> bool:

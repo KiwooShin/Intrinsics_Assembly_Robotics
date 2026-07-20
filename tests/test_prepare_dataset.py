@@ -215,5 +215,85 @@ class TestSaveEpisodes(unittest.TestCase):
             self.assertFalse((Path(d) / "joint_positions.npy").exists())
 
 
+class TestSeatFrameIndex(unittest.TestCase):
+    """Pure seat-event -> nearest-frame mapping (no rosbag I/O)."""
+
+    def test_maps_to_nearest_frame(self) -> None:
+        frame_times = np.array([0.0, 1.0, 2.0, 3.0, 4.0])  # synthetic timestamps
+        # Event at 2.6 is nearest frame 3 (|3-2.6|=0.4 < |2-2.6|=0.6).
+        self.assertEqual(pd.seat_frame_index(frame_times, [2.6]), 3)
+
+    def test_earliest_event_is_used(self) -> None:
+        frame_times = [0.0, 1.0, 2.0, 3.0, 4.0]
+        # Two events; the earliest (1.1) wins -> nearest frame 1.
+        self.assertEqual(pd.seat_frame_index(frame_times, [3.9, 1.1]), 1)
+
+    def test_exact_match(self) -> None:
+        self.assertEqual(pd.seat_frame_index([10.0, 10.5, 11.0], [10.5]), 1)
+
+    def test_no_events_returns_minus_one(self) -> None:
+        self.assertEqual(pd.seat_frame_index([0.0, 1.0, 2.0], []), -1)
+
+    def test_no_frames_returns_minus_one(self) -> None:
+        self.assertEqual(pd.seat_frame_index([], [1.0]), -1)
+
+    def test_event_before_first_frame_clamps_to_zero(self) -> None:
+        self.assertEqual(pd.seat_frame_index([5.0, 6.0, 7.0], [1.0]), 0)
+
+
+class TestSaveSeatMarker(unittest.TestCase):
+    """save_seat_marker persistence (additive .npy artifacts)."""
+
+    def _frames_at(self, times: list[float]) -> list[pd.EpisodeFrame]:
+        return [
+            pd.EpisodeFrame(
+                timestamp=t,
+                left_image=_img(0),
+                center_image=_img(0),
+                right_image=_img(0),
+                tcp_pose=[0.0] * 7,
+                tcp_velocity=[0.0] * 6,
+                tcp_error=[0.0] * 6,
+            )
+            for t in times
+        ]
+
+    def test_writes_index_and_times(self) -> None:
+        frames = self._frames_at([0.0, 1.0, 2.0, 3.0])
+        with tempfile.TemporaryDirectory() as d:
+            idx = pd.save_seat_marker(frames, [2.1], d)
+            self.assertEqual(idx, 2)  # 2.1 nearest frame at t=2.0
+            saved_idx = np.load(Path(d) / "insertion_frame.npy")
+            saved_t = np.load(Path(d) / "seat_time.npy")
+            self.assertEqual(int(saved_idx), 2)
+            self.assertEqual(saved_idx.dtype, np.int64)
+            np.testing.assert_allclose(saved_t, [2.1])
+
+    def test_no_events_writes_minus_one_and_empty_times(self) -> None:
+        frames = self._frames_at([0.0, 1.0, 2.0])
+        with tempfile.TemporaryDirectory() as d:
+            idx = pd.save_seat_marker(frames, [], d)
+            self.assertEqual(idx, -1)
+            self.assertEqual(int(np.load(Path(d) / "insertion_frame.npy")), -1)
+            self.assertEqual(np.load(Path(d) / "seat_time.npy").shape, (0,))
+
+    def test_empty_frames_write_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            idx = pd.save_seat_marker([], [1.0], d)
+            self.assertEqual(idx, -1)
+            self.assertFalse((Path(d) / "insertion_frame.npy").exists())
+            self.assertFalse((Path(d) / "seat_time.npy").exists())
+
+    def test_marker_index_slices_saved_timestamps(self) -> None:
+        # The persisted index must address the same array save_episodes writes.
+        frames = self._frames_at([100.0, 100.5, 101.0, 101.5, 102.0])
+        with tempfile.TemporaryDirectory() as d:
+            pd.save_episodes(frames, d)
+            idx = pd.save_seat_marker(frames, [101.4], d)
+            ts = np.load(Path(d) / "timestamps.npy")
+            self.assertEqual(idx, 3)  # 101.4 nearest 101.5 (frame 3)
+            self.assertAlmostEqual(float(ts[idx]), 101.5)
+
+
 if __name__ == "__main__":
     unittest.main()

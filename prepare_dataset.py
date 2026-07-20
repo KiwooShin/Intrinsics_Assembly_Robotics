@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import sys
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -197,6 +198,71 @@ def synchronize_frames(
             )
         )
     return frames
+
+
+def seat_frame_index(
+    frame_times: Sequence[float], event_times: Sequence[float]
+) -> int:
+    """Map the first insertion-event time to the nearest saved frame index.
+
+    Persisting this index lets the last-inch training selector end its window at
+    the exact seat frame instead of a speed-derived approximation
+    (INSERTION_PLAN.md P-INSERT-1 code change #3). The mapping uses the *same*
+    per-frame timestamp array the other ``.npy`` files are aligned to, so the
+    returned index directly slices those arrays.
+
+    Args:
+        frame_times: Per-frame capture times (seconds), i.e. the contents of
+            ``timestamps.npy`` in frame order.
+        event_times: ``/scoring/insertion_event`` message times (seconds); empty
+            when the demo never seated.
+
+    Returns:
+        The index of the frame whose timestamp is nearest the earliest event
+        time, or ``-1`` when there are no events or no frames.
+    """
+    if len(frame_times) == 0 or len(event_times) == 0:
+        return -1
+    seat_t = min(event_times)
+    frames_arr = np.asarray(frame_times, dtype=np.float64)
+    return int(np.argmin(np.abs(frames_arr - seat_t)))
+
+
+def save_seat_marker(
+    frames: list[EpisodeFrame], insertion_times: list[float], output_dir: str
+) -> int:
+    """Persist the per-episode seat marker beside the core ``.npy`` arrays.
+
+    Writes two additive files (loaders/episodes predating them are unaffected):
+      * ``insertion_frame.npy`` -- a scalar ``int64`` index into the episode
+        frames of the first seat event, or ``-1`` when the demo never seated.
+        Consumed by the last-inch selector (:func:`episode_prep.last_inch_window`)
+        as the exact window end.
+      * ``seat_time.npy`` -- the raw ``/scoring/insertion_event`` stamps (seconds,
+        ``float64``; possibly empty) kept for provenance.
+
+    Args:
+        frames: The synchronised frames written by :func:`save_episodes`; their
+            timestamps define the index space the marker points into.
+        insertion_times: ``/scoring/insertion_event`` message times (seconds).
+        output_dir: Directory the ``.npy`` files are written into (created if
+            missing).
+
+    Returns:
+        The persisted seat frame index (``-1`` when there are no frames or no
+        events).
+    """
+    if not frames:
+        return -1
+    frame_times = [f.timestamp for f in frames]
+    idx = seat_frame_index(frame_times, insertion_times)
+    os.makedirs(output_dir, exist_ok=True)
+    np.save(f"{output_dir}/insertion_frame.npy", np.asarray(idx, dtype=np.int64))
+    np.save(
+        f"{output_dir}/seat_time.npy",
+        np.asarray(insertion_times, dtype=np.float64),
+    )
+    return idx
 
 
 def save_episodes(frames: list[EpisodeFrame], output_dir: str) -> int:
@@ -383,6 +449,11 @@ def process_bag(bag_path: str, output_dir: str) -> int:
 
     n_saved = save_episodes(frames, output_dir)
     if n_saved:
+        seat_idx = save_seat_marker(frames, insertion_times, output_dir)
+        print(
+            f"  seat frame index: {seat_idx} "
+            f"(from {len(insertion_times)} insertion_event stamps)"
+        )
         print(f"  Saved {n_saved} frames to {output_dir}")
     return n_saved
 

@@ -185,6 +185,44 @@ residual is ~60 mm **lateral**, an axis with <1 mm signal in training.
 Rejected: obs-augment with `tcp_error` (it's controller tracking error ≈ F/K, not a
 port-alignment signal, and not in the recorded corpus).
 
+## v3 update (2026-07-20 09:45) — two-stage seat: localize → re-center → force-reactive compliant seat
+
+Run #3 (48h user mandate). The seat is now understood as a **two-stage stack**, and the
+two learned pieces are **complementary, in series** (design workflow wf_9be6685b):
+
+**Stage 1 — DAgger vision-localization (gets the plug to the mouth).** Covers the gross
+13–61 mm lateral offset. Collect deploy-policy stalls in a ground-truth sim, label with the
+true port offset, retrain the localization head on the policy's own distribution. This is the
+**gating experiment**: `eval_localization.py` held-out error decides whether *any* seat is
+reachable (> ~10 mm → occluded sensing lacks the info → ship capped-aux, insertion→P3).
+Re-center at the stall must **lift 3–5 mm → translate laterally in near-free-space → descend**
+to dodge the friction wall (a straight in-contact re-center creeps ~5 mm and stalls — proven).
+
+**Stage 2 — Disassembly-reversal FORCE-REACTIVE specialist (does the compliant sub-mm seat).**
+The capability entirely absent today (the scripted push jams on the rim even on aligned poses).
+Key sim facts (design-verified): a real seat is **terminal/irreversible** (CablePlugin welds the
+plug to the world + freezes the arm + releases from gripper after **1 s** continuous tip
+contact), so you can't pull out of a real seat — instead drive to seat *depth* and retract
+**immediately (no dwell)** so the latch never fires, recording a **slow perturbed retract**,
+then **reverse in time**. Reverse: negate the base_link `tcp_velocity` action (time-reversal
+negates all 6, no body-frame coupling — the exact action space train_v2/DeployACT use),
+`insertion_frame = last`. Wrench is a **proxy** (friction shear flips, no seating spike) — use
+InsertionNet **static-snapshot** (slow retract so shear ≪ normal), keep the recorded wrench.
+Perturbations target the **correctable band 0.2–3 mm** (the bore is 1–2.5 mm; a 13 mm perturb
+just lifts the plug into free space, no scrape signal) + a ~20 % **lift-translate-reseat** (3–8 mm)
+band that teaches the friction-dodging recovery. Train `train_v3 --wrench --k 8` (and K=4) with
+`--pushin-weight`, warm-start v2_wide → `specialist_disasm_k8.pt`. Deploy via the existing
+`AIC_SPECIALIST` seam (env-gated, byte-identical off).
+
+**Sequencing:** DAgger localization collection is the gating experiment (running). Build +
+collect + train the disasm specialist **in parallel** (offline + one detached sim collection,
+serialized against the localization collection). **Gate the joint eval (localize → re-center →
+disasm-seat) once localization clears its error gate.** Staged eval: (1) disasm STANDALONE on
+aligned poses (official_2/3 + cfg_005) = fastest first-seat signal; (2) joint stack officials
+n=3, ≥1 insertion + no officials regression. **Biggest risk:** if localization can't deliver the
+plug to within ~2–3 mm, the disasm specialist has no reachable seat on the poses that matter
+(official_3 26–61 mm, SC band) — the friction wall caps in-contact correction at a few mm.
+
 ## Immediate next actions (sim idle → do offline now)
 
 1. Implement code changes #1 and #3 + tests (offline). 2. Train `specialist_k8.pt`

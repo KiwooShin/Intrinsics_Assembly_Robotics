@@ -949,3 +949,24 @@ Killed: AIC_SEARCH radius/z-step/turns tuning as a seating solution (PLAN_SCORE9
 variant NOT run (physics: single-pose lottery, no localization value). Scripted search
 primitives (SearchDescent, AIC_SEARCH*) remain in-tree, env-gated OFF, as downstream
 insurance under a good target.
+
+## 2026-07-20 07:30 — Cycle 7: DAgger localization pipeline built + validated, collecting
+
+Executed the cycle-6 pivot. Built collect_dagger.sh (deploy policy in ground_truth
+sim, records /scoring/tf) + dagger_relabel.py (label deploy-stall states with true
+port offset). Bring-up = 5 committed fixes: (1) completion via scoring.yaml (deploy
+policy emits no CheatCode marker → hung); (2) pass exact --port-frame from config
+target_module_name (port_name alone ambiguous across NIC mounts); (3) drop bad
+`local` in main loop; (4) KEEP_BAG for offline debug; (5) **world↔aic_world identity
+bridge** in the TF resolver — the robot tree (world) and scene tree (aic_world) are
+disconnected same-origin roots (verified: plug-under-aic_world = TCP-under-world +
+grasp offset). VALIDATED offline on a real deploy bag: 486 stall frames labeled,
+port_target in base_link, deploy-stall offsets up to 10 cm. 44 relabel tests pass.
+
+Full collection launched (48 SFP configs, resumable, DAGGERDONE). Next: + officials/ab5
+poses → retrain fresh frozen-encoder localization head → held-out deploy-stall
+val-offset = the decision metric (<10mm → seat attempt via AIC_SEARCH_AUX re-center;
+>10mm → ship capped-aux, insertion→P3). Still 0 seats; capped-aux IQM 35.8 banked.
+Reflection: the pivot was correct but infra bring-up cost ~5 single-trial cycles
+before switching to KEEP_BAG offline iteration — should have retained bags from the
+first failure.

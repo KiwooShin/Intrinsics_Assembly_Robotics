@@ -13,6 +13,36 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-20 07:30 — Run #2 cycle 7: DAgger localization pipeline live, collecting
+
+**Avg score:** still **0 insertions** (~165 trials); the banked deploy config
+(capped-aux, ab5 mean 28.0 / IQM 35.8 vs baseline 23.1) is the Track-S submission
+floor, unchanged. This cycle was execution of the cycle-6 pivot: build + bring up
+the **privileged-DAgger port-localization** data pipeline (the seat's one missing
+capability = deploy-time port localization; aux head is 15–61 mm off at deploy).
+
+**What's missing:** the seat, gated on one number not yet measured — the retrained
+localization head's **held-out error on deploy-stall states**. Pipeline now works
+end-to-end (validated offline on a real deploy-rollout bag: 486 stall frames labeled
+with the true port offset). Bring-up cost five infra fixes, all committed: completion
+detection (deploy policy has no CheatCode marker → wait for scoring.yaml), port
+disambiguation (same port name on multiple NIC mounts → exact `--port-frame` from
+`target_module_name`), and the load-bearing one — the robot TF tree (`world`) and the
+scene/scoring tree (`aic_world`) are disconnected same-origin roots, now bridged by
+identity (verified: the gripper-welded plug under aic_world sits at the grasp offset
+from the TCP under world).
+
+**Next 4 h:** full DAgger collection running (48 SFP configs, deploy policy in a
+ground-truth sim, ~6–8 h, resumable) → also collect the officials/ab5 seat poses →
+retrain a fresh frozen-encoder localization head on the deploy-stall labels →
+**GATE: held-out localization error.** < ~10 mm → wire a one-shot spiral re-center
+(`AIC_SEARCH_AUX`) onto the predicted port and run the officials seat eval (≥1
+insertion = first seat). > ~10 mm → the occluded last-inch sensing lacks the
+information; ship the capped-aux floor and move insertion to Track-L P3 (residual RL).
+Kill date Jul 26. SOTA: privileged→student on-policy distillation / DAgger
+(2606.10385, 2603.04038); the oracle last-inch is pure vertical (lat/vert 0.014) so
+plain BC can't clone the correction — DAgger *computes* the label from the port TF.
+
 ## 2026-07-20 05:40 — Run #2 cycle 6: scripted search KILLED, pivot to learned localization (DAgger)
 
 **Avg score (search probes):** official_2 ~43 (3/3), official_3 ~29, cfg_005 ~10;

@@ -1112,3 +1112,33 @@ stays the adopted config. SC official_3 slightly favors no-aux (37.8 vs 33.1) �
 bearing marginally hurts SC, consistent with SC being config-frame-limited (Lever 3).
 Sim cleaned (0 procs). Still 0 hard-pose seats (retired). Next: SC config fix / dead-band
 retrain as the measurable showcase win, + demo video + technical writeup.
+
+## 2026-07-21 00:55 — RUN #4: SOTA research synthesis (4-thread workflow) → Milestone-1 design
+
+Research sweep (architectures / force-tactile / curriculum-RL / benchmarks; 20+ papers)
+CONCLUSIONS: (1) keep ACT (backbone matters less than sensing+horizon+demo quality);
+make it a FORCE-CONDITIONED ACT specialist, short chunk K=4-8, CVAE + push-in weighting
+vs mode-averaging-to-hold. (2) Wrist F/T in the ACTOR is the single highest-leverage
+add (AugInsert: dropping F/T is the largest ablation hit in contact); best practice =
+baseline-subtracted Δf at handoff + short force history + next-wrench aux head
+(Bi-ACT 2401.17698, FTACT 2509.23112, ForceFlow 2605.11048). (3) Curriculum start-near-
+goal, grow outward (Florensa 1707.05300, IndustReal SBC 80%/10% gates, U[-2,2]mm design
+noise); ~2mm is the reliable force capture radius at sub-mm clearance; chamfer 0.5-1mm
+is the highest-leverage single asset change. (4) IL-first; DAgger refinement; residual
+RL only off-policy + bounded + deferred (0.05x RTF). Full citations in the workflow
+result (whdtd783y): ACT 2304.13705, DiffusionPolicy 2303.04137, IndustReal 2305.17110,
+AutoMate 2407.08028, Reach-to-Insert 2605.04649, InsertionNet 2104.14223, TacDiffusion
+2409.11047, SI-Diff 2605.12247, ResiP 2407.16677, IBRL 2311.02198, Touch2Insert
+2603.03627, RFCL 2405.03379, AugInsert 2410.14968.
+
+MILESTONE-1 DESIGN (aligned-above-port seat; user's easy-first directive). Since the
+user dropped the competition, eval-legality no longer binds: the aligned initial state
+is realized by PRIVILEGED STAGING (CheatCode drives to ~2cm above the aligned port via
+true port TF) then HANDOFF to the learned all-sensor policy for descend+seat. (The
+research's alternative — approach->stall handoff — is NOT aligned: official_2 stalls
+13mm off.) Training data = last-inch segments of the 77 oracle-success eps (ds_phase0
+44 + ds_phase2 33, wrench recorded). First cut uses the EXISTING --wrench path
+(single-step wrench in state, state_dim 13) + --last-inch-s + --k 4 + pushin 5.0;
+escalate to Δf/8-frame-history/aux-wrench tokens only if force is ignored. Gate:
+offline |v0| decisively downward (0.015-0.024 m/s) then sim ≥1 insertion_event from
+staged-aligned start, n≥3. If rim-jam even aligned → 0.5-1mm chamfer on the port asset.

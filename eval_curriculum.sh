@@ -77,6 +77,14 @@ run_trial() {  # unit trial_dir
     fi
   done
   [ $DONE -eq 0 ] && echo "[curr] WARNING: completion not detected"
+  # The log marker fires when the TASK ends, but the engine writes scoring.yaml
+  # later (teardown -> scoring). Killing the sim on the marker razes the score
+  # (the m3-resweep 8/9-unscored bug). Wait for the FILE itself before teardown.
+  local j
+  for j in $(seq 1 40); do
+    [ -f "$TDIR/scoring.yaml" ] && { echo "[curr] scoring.yaml landed (+$((j*10))s)"; break; }
+    sleep 10
+  done
   sleep 5
   return 0
 }

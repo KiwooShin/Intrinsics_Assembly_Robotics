@@ -13,6 +13,38 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-21 05:40 — RUN #4 cycle 2: capture radius ≥1mm (3/3 seats at lat=1mm); force ablation confirms wrench
+
+**GOAL of this session:** learned all-sensor insertion via easy→hard curriculum (M1
+achieved last cycle: 3/3 seats at 88/100, staged-aligned). This cycle measured the
+**lateral capture radius** and the **force contribution**:
+
+| Condition (staged official_2, n=3) | Seats | Detail |
+| --- | --- | --- |
+| aligned, **wrench** specialist | **3/3** | 88.0/88.2/88.2 |
+| aligned, no-wrench (ablation) | 1/3* | 1 seat (87), 1 partial @50mm (51), 1 unscored* |
+| **lat=1mm** wrench | **3/3** | all 88 — reliably corrects 1 mm |
+| lat=2mm wrench | 0/2* | both end 50–60 mm away (drifts off; no lateral signal) |
+| lat=0.5mm / lat=4mm | unscored* | *trial-timeout raced the engine's scoring write — fixed (cap 900→1300 s), gaps re-running |
+
+**Findings:** (1) the learned capture radius is **≥1 mm and <2 mm** — exactly the
+research prediction for a corpus whose oracle last-inch is pure-vertical (no lateral
+correction to imitate); beyond capture the policy *drifts away* rather than searching.
+(2) **Wrist-F/T conditioning is load-bearing even aligned** (3/3 vs 1/3 + partial).
+
+**What's missing:** (1) lateral-correction training signal — the M3 fix is
+**offset-staged oracle demos**: stage the CheatCode oracle at 0.5–4 mm offsets and let
+it descend+seat; the demo then *contains* the corrective motion, forward-ordered — no
+disassembly-reversal machinery (and none of its latch/ordering pitfalls). (2) The
+unscored-trial raciness (fixed, gaps filling). (3) Later: angular offsets, SC transfer,
+composing with the learned approach (needs capture ≥13 mm or a better handoff).
+
+**Next 4 h:** fill the sweep gaps (running) → build + run `CURR_MODE=oracle` collection
+(~24 offset demos across 0.5–4 mm × azimuths) → retrain the specialist on 77+24 →
+re-sweep lat 1/2/4 mm → capture-radius curve v2. Commit each step. SOTA: reverse/
+start-state curricula (RFCL 2405.03379, IndustReal SBC 2305.17110), force-in-actor
+(Bi-ACT 2401.17698, AugInsert 2410.14968).
+
 ## 2026-07-21 02:20 — RUN #4 cycle 1: ★ MILESTONE 1 — FIRST LEARNED INSERTION, 3/3 SEATS at 88/100 ★
 
 **GOAL of this session:** learned all-sensor (3×RGB + wrist F/T + proprio) insertion

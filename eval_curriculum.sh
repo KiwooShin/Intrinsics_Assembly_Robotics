@@ -20,7 +20,7 @@ NAME="${NAME:-official_2}"
 REPS="${REPS:-3}"
 CKPT="${CKPT:-$HOME/training/ckpt/insert_m1_wrench_k4.pt}"
 OUT="${OUT:-results/curr_m1}"
-TIMEOUT="${TIMEOUT:-1300}"
+TIMEOUT="${TIMEOUT:-2100}"
 POLICY_PY="$HOME/venvs/aic-deploy/bin/python"
 mkdir -p "$OUT/trials"
 
@@ -44,7 +44,7 @@ run_trial() {  # unit trial_dir
   export CURR_LAT_OFFSET_MM="${LAT_MM:-0}"
   export CURR_LAT_AZIMUTH_DEG="${LAT_AZ_DEG:-0}"
   export CURR_STANDOFF_M="${STANDOFF_M:-0.02}"
-  export CURR_BUDGET_S="${BUDGET_S:-30}"
+  export CURR_BUDGET_S="${BUDGET_S:-20}"
 
   cleanup_sim
   ros2 run rmw_zenoh_cpp rmw_zenohd > /dev/null 2>&1 &
@@ -69,7 +69,7 @@ run_trial() {  # unit trial_dir
     -p policy:=aic_example_policies.ros.CurriculumInsert >> "$TDIR/run.log" 2>&1 &
 
   local DONE=0
-  for i in $(seq 1 90); do
+  for i in $(seq 1 140); do
     sleep 10
     if [ -f "$TDIR/scoring.yaml" ] || \
        grep -qE "Finished scoring trial|Engine Stopped|completed successfully" "$TDIR/run.log" 2>/dev/null; then
@@ -91,7 +91,7 @@ for r in $(seq 1 "$REPS"); do
   timeout --signal=INT --kill-after=30 "$TIMEOUT" \
     bash -c "$(declare -f cleanup_sim run_trial); CFG='$CFG' CKPT='$CKPT' \
              LAT_MM='${LAT_MM:-0}' LAT_AZ_DEG='${LAT_AZ_DEG:-0}' \
-             STANDOFF_M='${STANDOFF_M:-0.02}' BUDGET_S='${BUDGET_S:-30}' \
+             STANDOFF_M='${STANDOFF_M:-0.02}' BUDGET_S='${BUDGET_S:-20}' \
              POLICY_PY='$POLICY_PY' run_trial '$UNIT' '$TDIR'"
   cleanup_sim
   if [ -f "$TDIR/scoring.yaml" ]; then

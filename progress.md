@@ -13,6 +13,47 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-20 20:30 — Run #3 cycle 3: INSERTION RETIRED (all sensor-legal paths exhausted); pivot to raise-avg
+
+**Avg score:** hard/stratified poses still **0 seats** (~175 trials). The banked
+submission floor is capped-aux (ab5 **IQM 35.8** / mean 28.0 vs baseline 23.1). NOTE
+(forensics): plain **v2_wide already seats on the true-official `eval_config.yaml`**
+(the actually-scored submission config) at **119.4/300 ≈ 40/trial** — a real insertion;
+the capped-aux aux-guard was tuned on the *harder* ab5 poses and may *suppress* that
+seat on the easy config. So there IS a seat — on the submission config — and the
+submission-checkpoint choice is now the highest-value open question.
+
+**What's missing / RESOLVED:** the hard-pose seat is **structurally unreachable
+sensor-legally** — decided this cycle by 2 analysis agents + a decisive offline gate:
+
+| Sensor-legal path | Result | Why dead |
+| --- | --- | --- |
+| Vision localization (DAgger, covariate-fixed) | **FAIL** | held-out lateral error **22.7 mm @far/visible (50–80 mm), 49 mm @stall** vs ~5 mm needed — a **camera-resolution** cap (128 px can't resolve a 2 mm port at any distance), not just occlusion |
+| Disasm-reversal specialist (latch+reverse bugs fixed, valid test) | **FAIL** | degrades official_2 13 mm→40–50 mm, 0 seats — **blind-direction** (can't know which way to correct) + pure-vertical oracle last-inch |
+| Blind spiral / Lissajous force search | falsified | r18>13 mm still 0/3 (friction wall K_eff≈350 N/m; pitch 9 mm ≫ 2 mm bore) |
+| Force-reactive residual RL | NO-GO | 0.05× RTF (infeasible in 35 h) + flat-face contact gives no bearing gradient (unlearnable) |
+| Chamfer + lateral compliance | NO-GO | needs offset <1–2 mm; plug rests on rim at 13 mm |
+| "Aim-then-commit" (localize at last unoccluded frame) | **FAIL** | that IS the far frame — 22.7 mm, camera-capped |
+
+Literature agrees (retrospective): every sub-mm-clearance insertion method carries a
+**pre-contact lateral bearing to ~2–5 mm** (in-hand RGB seeing the hole, tactile
+fingertip, or estimated pose bounded to a few mm — InsertionNet 2104.14223/2203.01153,
+IndustReal 2305.17110, AutoMate 2407.08028, HIL-SERL 2410.21845). This setup lacks it:
+RGB occluded/low-res at the last inch, wrist F/T blind pre-contact, port TF eval-illegal
+(State-Leaking DQ). 0/~175 across **five** method families ⇒ **insertion retired**.
+
+**Next 4 h — PIVOT to raise-average** (certain ROI; ceiling ~38–40/100 proximity-only,
+>40 needs a seat). Ranked (forensics agent): **(1) reconfirm the submission checkpoint**
+— plain v2_wide vs capped-aux on `eval_config.yaml` at n=3; if the aux-guard suppresses
+v2_wide's real seat, ship v2_wide (or route v2_wide→official / capped-aux→stratified).
+**(2)** dead-band cfg_000/004/008 (15-suite +1.0 floor) + cfg_001 (ab5 −7.0, biggest
+leak) — BC coverage hole (undersampled |yaw|∈[1.2,1.5]), fix = collect those poses →
+**plain** warm-start retrain of v2_wide (NOT the frozen aux-probe; NOT wrench/tail-trim)
+→ n≥3 gate (dead-band floor→prox AND officials don't regress). **(3)** SC config-audit
+propagation. **(4)** lock variance-stabilized guard. Ensembling stays retired (n=3
+negative: OFF 23.1 > ON 20.1). Submission packaging + demo video in the tail. SOTA/refs
+as above + seam-fill capture-radius 2204.07776.
+
 ## 2026-07-20 16:20 — Run #3 cycle 2: localization gate FAILED; disasm unblocked; one decisive first-seat cycle
 
 **Avg score:** still **0 insertions** (~168 trials); banked floor unchanged (capped-aux

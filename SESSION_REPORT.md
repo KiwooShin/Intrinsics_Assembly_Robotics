@@ -1046,3 +1046,47 @@ DECISION: run ONE decisive disasm cycle (widened lift-translate band lateral→1
 (≤3-pose demo). 0 seats → retire insertion, pivot ~35h to raise-avg + submission. Boxed to
 Jul 21 ~06:00. Train specialist with --last-inch-s (39% static frames are far-standoff
 staging). Still 0 seats; capped-aux banked.
+
+## 2026-07-20 20:30 — Run #3 cycle 3: INSERTION RETIRED (post-mortem) + raise-avg pivot
+
+Two analysis agents (raise-avg forensics + insertion retrospective/literature) + a
+decisive offline gate. INSERTION is retired after exhausting five sensor-legal families.
+
+DECISIVE GATE (aim-then-commit): the retrospective proposed localizing the port at the
+last UNOCCLUDED approach frame (~5-6cm out) rather than the occluded stall. Tested
+dagger_aux held-out SFP lateral error vs true distance-to-port:
+  far 50-80mm: 22.7mm | mid 30-50mm: 45.9mm | near 15-30mm: 49.0mm.
+Aim-frame (30-80mm) median 22.7-27mm >> 5mm gate => FAIL. This is a CAMERA-RESOLUTION
+cap (128px can't resolve the 2mm port even when fully visible), not just occlusion.
+Kills aim-then-commit and confirms the localization ceiling is structural.
+
+INSERTION SCORECARD (0/~175 across 5 families):
+| Family | Best result | Verdict |
+| ------ | ----------- | ------- |
+| Vision localization (DAgger, covariate-fixed) | 22.7mm far / 37-49mm stall | camera-capped |
+| Aux-bearing head (oracle-trained) | 0.86cm val -> 15-61mm deploy | covariate + occlusion |
+| Scripted spiral/Lissajous force search | r18>13mm, 0/3 | friction wall NO-GO |
+| Push / disasm-reversal specialist | official_2 13->40-50mm, 0 seats | blind-direction |
+| Force-reactive residual RL | not run | 0.05xRTF + no bearing gradient = infeasible |
+Literature: sub-mm insertion needs a pre-contact bearing to ~2-5mm (in-hand RGB / tactile
+fingertip / pose-estimate bounded few-mm): InsertionNet 2104.14223/2203.01153, IndustReal
+2305.17110, AutoMate 2407.08028, HIL-SERL 2410.21845, seam-fill 2204.07776. This rig lacks
+it (occluded low-res RGB, F/T blind pre-contact, port TF eval-illegal). Retire = correct.
+
+DISASM PIPELINE BUGS FOUND (documented; disasm retired so not re-fixed in code):
+1. Latch weld during collection (fixed: descent-dwell + disable TouchPlugin for collection).
+2. reverse_disasm ORDERING: collected episodes came out RETRACT-order (seat at frame 0,
+   insertion_frame mislabeled N-1) because the prepare_dataset RAW was already
+   insertion-ordered relative to the module's assumption -> reverse_disasm double-flipped
+   it. Specialist w/ pushin-weight then learned to RETRACT (drove plug 8-20cm out).
+   Workaround: re-reversed 18 eps -> ds_disasm_fixed (seat at END); valid retest still 0
+   seats (blind-direction). If disasm ever revisited: reconcile prepare_dataset RAW order
+   with reverse_disasm's assumption + add an order-assertion regression test.
+
+RAISE-AVG PIVOT (next ~35h, ceiling ~38-40/100 proximity-only): (1) reconfirm submission
+ckpt v2_wide vs capped-aux on eval_config.yaml n=3 (v2_wide's real 119.4/300 seat may be
+suppressed by the capped-aux guard on the easy config -> ship v2_wide or route). (2)
+dead-band cfg_000/004/008 (15-suite +1.0 floor) + cfg_001 (ab5 -7.0) via collect-those-
+poses -> PLAIN warm-start retrain of v2_wide (not aux-probe, not wrench/tail-trim), n>=3
+gate. (3) SC config-audit. (4) variance-stabilized guard lock. Ensembling stays retired.
+Still 0 hard-pose seats; capped-aux IQM 35.8 banked; v2_wide seats on submission config.

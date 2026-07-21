@@ -1142,3 +1142,36 @@ research's alternative — approach->stall handoff — is NOT aligned: official_
 escalate to Δf/8-frame-history/aux-wrench tokens only if force is ignored. Gate:
 offline |v0| decisively downward (0.015-0.024 m/s) then sim ≥1 insertion_event from
 staged-aligned start, n≥3. If rim-jam even aligned → 0.5-1mm chamfer on the port asset.
+
+## 2026-07-21 01:55 — ★ MILESTONE 1: FIRST LEARNED-POLICY INSERTION (88.0/100) ★
+
+RUN #4 curriculum, first milestone: the force-conditioned ACT specialist
+(insert_m1_wrench_k4.pt: K=4, state_dim 13 w/ wrist F/T, last-inch-s 6, pushin 5.0,
+77-ep oracle corpus, 2690 frames) SEATED the SFP plug on official_2 from the
+staged-aligned start (CurriculumInsert harness: privileged staging 20mm above the
+port, then learned receding-horizon descent):
+
+  results/curr_m1/trials/official_2_r1/scoring.yaml:
+    total: 88.0  |  tier_3: 75 "Cable insertion successful."
+    insertion-force transient max 25.64N (0.02s, no penalty)
+    path length 0.21m, duration 56s
+
+This is the FIRST insertion by a LEARNED policy in this project (all prior seats
+were the privileged CheatCode oracle; the deployed policy's best was ~40 proximity).
+The user's curriculum directive (start with the plug located above the port, learn
+the insertion motion first) + all-sensor conditioning worked on the first clean
+attempt. Current tally 1 seat / 3 staged trials (r2/r3 ended ~24mm off in y, no
+seat, scoring late/absent — reruns filling n=3; sim nondeterminism + a saturated
+xy-integrator ±0.05 under investigation).
+
+Debug trail that got here (all committed): harness v1 froze on an obs-anchored
+frame mismatch → v2 anchors a virtual plug-tip target through calc_gripper_pose;
+the tcp_z telemetry that suggested "arm frozen" was itself a stale/wrong-frame
+read — the arm was moving (and in r1, seating) the whole time; per-cycle telemetry
+to be switched to the live plug TF. Waiter score-grep also hid tier_3 (grabbed
+tier_1's 'score: 1') — fixed to parse total: + tier_3.
+
+Next: fill n≥3 + no-wrench ablation (force contribution) → M2 lateral-offset sweep
+(0.5/1/2/4mm capture radius, IndustReal-style gates). Refs: curriculum start-near-
+goal (RFCL 2405.03379, Florensa 1707.05300), force-in-actor (Bi-ACT 2401.17698,
+AugInsert 2410.14968), IndustReal 2305.17110.

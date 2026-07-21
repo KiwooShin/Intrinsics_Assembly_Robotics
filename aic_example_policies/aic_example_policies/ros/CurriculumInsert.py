@@ -341,8 +341,32 @@ try:  # pragma: no cover - exercised only inside the aic_model runtime.
                 self.sleep_for(_DESCENT_DT_S)
             self.get_logger().info(
                 f"CurriculumInsert: staged at {standoff * 1000:.0f}mm above port "
-                f"(+{lat_mm:.1f}mm lateral) — handing off to specialist"
+                f"(+{lat_mm:.1f}mm lateral) — handing off to "
+                f"{os.environ.get('CURR_MODE', 'specialist')}"
             )
+
+            # --- Phase 2 (oracle mode): scripted CheatCode-style descent ladder to
+            # the TRUE port from the OFFSET hover. The first ladder target snaps
+            # the xy back to the port center, so the recorded episode contains the
+            # genuine lateral-correction motion the pure-vertical oracle corpus
+            # lacks (M3 offset-staged demo collection). Ends with the natural seat
+            # weld + a stabilization dwell, exactly like the training corpus. ---
+            if os.environ.get("CURR_MODE", "specialist").strip() == "oracle":
+                z = standoff
+                floor_z = approach.descent_floor_z
+                while z > floor_z:
+                    z -= 0.0005
+                    try:
+                        self.set_pose_target(
+                            move_robot=move_robot,
+                            pose=self.calc_gripper_pose(port_tf, z_offset=z),
+                        )
+                    except TransformException as ex:
+                        self.get_logger().warn(f"oracle descent TF failure: {ex}")
+                    self.sleep_for(0.05)
+                self.get_logger().info("CurriculumInsert(oracle): dwell at seat")
+                self.sleep_for(5.0)
+                return True
 
             # --- Phase 2: learned insertion (receding horizon). The specialist's
             # twists integrate into a VIRTUAL plug-tip target (initialized at the

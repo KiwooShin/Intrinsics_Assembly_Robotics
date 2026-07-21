@@ -13,6 +13,37 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-21 09:40 — RUN #4 cycle 3: M2 curve final [1,2)mm; M3 offset demos collected (24/24) + m3 retrained
+
+**GOAL:** learned all-sensor insertion via easy→hard curriculum. M1 done (3/3 seats,
+88). This cycle: finalized the M2 curve, collected the M3 lateral-correction corpus,
+retrained.
+
+**M2 final capture-radius curve (staged official_2):** 0 mm **3/3** (88s) · 0.5 mm
+**1/1** scored (91) · 1 mm **3/3** (88s) · 2 mm **0/2** (ends 50–60 mm away) · 4 mm
+**0/2** (ends ~40 mm). **Capture ∈ [1, 2) mm.** No-wrench ablation: 1 seat + 1
+partial vs wrench 3/3 → **F/T conditioning is load-bearing** (AugInsert's "largest
+ablation hit" reproduced). Beyond capture the policy **drifts away** — no lateral
+signal in the pure-vertical corpus, as predicted.
+
+**M3 executed this cycle:** `CURR_MODE=oracle` collection — **24/24 KEEPs** of
+offset-staged oracle demos (0.5–4 mm × 8 azimuths; the oracle corrects the staged
+offset while descending, so the demo *contains* the lateral correction). 19 seated
+demos kept for training (5 no-seat long-runners excluded — their endings teach the
+drift failure). Retrained `insert_m3_wrench_k4.pt` on 77 base + 19 offset demos
+(first-action err 0.0136 m/s).
+
+**What's missing:** capture ≥2 mm (the m3 resweep at 1/2/4 mm — running — answers
+whether corrective demos widen it); then angular offsets, SC transfer, and the
+approach-composition gap (real handoff lands ~13 mm out; ladder 6/8/13 mm if capture
+extends). Residual ~20% engine scoring-write flakiness (harness hardening note).
+
+**Next 4 h:** m3 resweep verdict → if ≥2/3 at 2 mm: extend ladder + angular; if not:
+inspect m3's lateral predictions offline, consider more/wider offset demos or
+capture-specific loss weighting. Then: seat-trial GIF for demo/, showcase-page update
+with M1–M3, memory update. Commit each result. SOTA: IndustReal SBC 2305.17110, RFCL
+2405.03379, AugInsert 2410.14968, Bi-ACT 2401.17698.
+
 ## 2026-07-21 05:40 — RUN #4 cycle 2: capture radius ≥1mm (3/3 seats at lat=1mm); force ablation confirms wrench
 
 **GOAL of this session:** learned all-sensor insertion via easy→hard curriculum (M1

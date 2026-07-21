@@ -44,6 +44,7 @@ run_ep() {  # lat_mm az_deg bag_path log_path
   export CURR_LAT_OFFSET_MM="$LAT"
   export CURR_LAT_AZIMUTH_DEG="$AZ"
   export CURR_STANDOFF_M="${STANDOFF_M:-0.02}"
+  export CURR_CORRECT_AT_MM="${CORRECT_AT_MM:-0}"
   export CURR_CKPT=unused-in-oracle-mode
 
   cleanup_sim
@@ -105,7 +106,7 @@ while [ $i -lt "$EPS" ]; do
   LOG=$OUT/$(basename "$EPDIR").log
   echo "---- [collect] EP $i/$EPS lat=${LAT}mm az=${AZ} $(date '+%T') ----"
   timeout --signal=INT --kill-after=30 "$TIMEOUT" \
-    bash -c "$(declare -f cleanup_sim run_ep); STANDOFF_M='${STANDOFF_M:-0.02}' \
+    bash -c "$(declare -f cleanup_sim run_ep); STANDOFF_M='${STANDOFF_M:-0.02}' CORRECT_AT_MM='${CORRECT_AT_MM:-0}' \
              CFG='$CFG' POLICY_PY='$POLICY_PY' run_ep '$LAT' '$AZ' '$BAG' '$LOG'"
   cleanup_sim
   if [ -d "$BAG" ]; then

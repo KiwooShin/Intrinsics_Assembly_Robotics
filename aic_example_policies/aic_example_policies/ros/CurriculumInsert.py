@@ -352,9 +352,49 @@ try:  # pragma: no cover - exercised only inside the aic_model runtime.
             # lacks (M3 offset-staged demo collection). Ends with the natural seat
             # weld + a stabilization dwell, exactly like the training corpus. ---
             if os.environ.get("CURR_MODE", "specialist").strip() == "oracle":
+                # CURR_CORRECT_AT_MM > 0 = LATE-CORRECTION demo: descend AT THE
+                # OFFSET xy down to that height above the mouth, then translate
+                # laterally to the true port xy over ~10 steps, then seat. Teaches
+                # near-contact lateral recovery — the free-space-correcting default
+                # (correct_at=0 behaves like the original: first target snaps to
+                # the true xy high above) never shows rim-contact recovery, which
+                # capped the learned capture radius at [1,2)mm (m3/m3c evals).
+                correct_at = _f("CURR_CORRECT_AT_MM", 0.0) * 1e-3
                 z = standoff
                 floor_z = approach.descent_floor_z
-                while z > floor_z:
+
+                def _tip(zh: float, frac: float) -> np.ndarray:
+                    """Plug-tip target at height ``zh``, offset scaled by ``frac``."""
+                    return np.array([
+                        port_tf.translation.x + dxy[0] * frac,
+                        port_tf.translation.y + dxy[1] * frac,
+                        port_tf.translation.z + zh,
+                    ])
+
+                if correct_at > 0.0:
+                    while z > correct_at:            # offset descent (frac=1)
+                        z -= 0.0005
+                        try:
+                            self.set_pose_target(
+                                move_robot=move_robot,
+                                pose=self.calc_gripper_pose(
+                                    port_tf, target_position_base=_tip(z, 1.0)),
+                            )
+                        except TransformException as ex:
+                            self.get_logger().warn(f"late-corr TF: {ex}")
+                        self.sleep_for(0.05)
+                    for s in range(10, -1, -1):      # lateral correction at height
+                        try:
+                            self.set_pose_target(
+                                move_robot=move_robot,
+                                pose=self.calc_gripper_pose(
+                                    port_tf,
+                                    target_position_base=_tip(z, s / 10.0)),
+                            )
+                        except TransformException as ex:
+                            self.get_logger().warn(f"late-corr TF: {ex}")
+                        self.sleep_for(0.1)
+                while z > floor_z:                   # centered final descent
                     z -= 0.0005
                     try:
                         self.set_pose_target(

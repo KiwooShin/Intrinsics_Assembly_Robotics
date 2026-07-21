@@ -91,7 +91,7 @@ for r in $(seq 1 "$REPS"); do
   timeout --signal=INT --kill-after=30 "$TIMEOUT" \
     bash -c "$(declare -f cleanup_sim run_trial); CFG='$CFG' CKPT='$CKPT' \
              LAT_MM='${LAT_MM:-0}' LAT_AZ_DEG='${LAT_AZ_DEG:-0}' \
-             STANDOFF_M='${STANDOFF_M:-0.02}' BUDGET_S='${BUDGET_S:-45}' \
+             STANDOFF_M='${STANDOFF_M:-0.02}' BUDGET_S='${BUDGET_S:-30}' \
              POLICY_PY='$POLICY_PY' run_trial '$UNIT' '$TDIR'"
   cleanup_sim
   if [ -f "$TDIR/scoring.yaml" ]; then

@@ -20,7 +20,7 @@ NAME="${NAME:-official_2}"
 REPS="${REPS:-3}"
 CKPT="${CKPT:-$HOME/training/ckpt/insert_m1_wrench_k4.pt}"
 OUT="${OUT:-results/curr_m1}"
-TIMEOUT="${TIMEOUT:-900}"
+TIMEOUT="${TIMEOUT:-1300}"
 POLICY_PY="$HOME/venvs/aic-deploy/bin/python"
 mkdir -p "$OUT/trials"
 
@@ -44,7 +44,7 @@ run_trial() {  # unit trial_dir
   export CURR_LAT_OFFSET_MM="${LAT_MM:-0}"
   export CURR_LAT_AZIMUTH_DEG="${LAT_AZ_DEG:-0}"
   export CURR_STANDOFF_M="${STANDOFF_M:-0.02}"
-  export CURR_BUDGET_S="${BUDGET_S:-45}"
+  export CURR_BUDGET_S="${BUDGET_S:-30}"
 
   cleanup_sim
   ros2 run rmw_zenoh_cpp rmw_zenohd > /dev/null 2>&1 &

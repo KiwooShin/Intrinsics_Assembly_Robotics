@@ -13,6 +13,45 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-21 00:45 — RUN #4 START: curriculum insertion (user new direction, 48h)
+
+**GOAL of this session (user directive 2026-07-21 ~00:40):** REOPEN the insertion task
+and get a **learned policy to actually seat** — via a **curriculum that starts from the
+easiest case and grows harder**, using **all available sensor modalities** (3 RGB +
+wrist force/torque + joint proprioception). The user's key idea: don't start with
+search/detection; **start with the plug already located directly above the aligned
+port** so the model learns the *insertion motion* (descend + seat) easily, then progress
+to lateral offset and full approach. New 48h clock (STOP ~2026-07-23 ~00:40). Report
+every 4 h here (goal / what's missing / next 4 h). Commit + push frequently as KiwooShin.
+
+**Why this is a fresh, valid attack (vs the retired Run-#3 conclusion):** Run #3 showed
+the *full blind* task is unreachable because port localization is camera-resolution-
+capped (~22.7 mm) — but it never isolated the *seating skill* itself. This curriculum
+sidesteps localization for milestone 1 (privileged/curriculum initial state = plug above
+the aligned port) and asks a cleaner, achievable question: **can a learned all-sensor
+(esp. force-reactive) policy perform the insertion once positioned?** Then it maps how
+far that skill generalizes (capture-radius sweep) before re-introducing approach.
+
+**Task structure (clarified):** 2 distinct tasks — **SFP** (28 stratified cfgs + officials
+1/2; world-z descent, floor −0.015) and **SC** (25 cfgs + official_3; tilted insertion-
+axis, floor −0.010). Curriculum starts on **SFP** (simpler axis, more data, policy already
+SFP-competent to ~40 proximity).
+
+**What's missing:** (1) a learned policy that *seats* (0 seats to date on hard poses);
+(2) the **wrist F/T modality wired into the ACT policy** (currently RGB+proprio only —
+force is the key new signal for compliant seating); (3) a **curriculum harness** that
+starts the plug above the aligned port and grows the lateral offset; (4) SOTA grounding
+(research sweep running).
+
+**Next 4 h:** (a) SOTA research synthesis (4-thread workflow → architecture + sensor-
+fusion + curriculum + first experiment). (b) Probe sim: pre-position above the aligned
+port (privileged, curriculum-legal) + collect **forward aligned-insertion demos with
+wrench** from the CheatCode oracle. (c) Add **wrist F/T** to the ACT state (state_dim
+7→13 already supported via `--wrench`). (d) **Milestone 1:** train an all-sensor policy
+on aligned SFP insertion demos → eval from the aligned start → **≥1 seat = insertion
+skill learned**. SOTA refs pending from the research sweep (InsertionNet, IndustReal,
+AutoMate, Factory, SERL/HIL-SERL).
+
 ## 2026-07-21 00:00 — Run #3 cycle 4: showcase pivot (no submission); aux-guard ablation; SC scoring-frame fix
 
 **Avg score:** officials on the adopted **capped-aux = 38.0** (n=3, robust proximity;

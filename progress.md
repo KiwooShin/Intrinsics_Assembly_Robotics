@@ -13,6 +13,40 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-21 00:00 — Run #3 cycle 4: showcase pivot (no submission); aux-guard ablation; SC scoring-frame fix
+
+**Avg score:** officials on the adopted **capped-aux = 38.0** (n=3, robust proximity;
+SFP officials ~40, SC official_3 33.1). **0 hard-pose seats** (insertion retired last
+cycle — structurally unreachable). USER DIRECTIVE (~22:30): **not submitting** to the
+AIC portal — this run **showcases robotics ability**; drop all packaging, optimize for
+measurable improvements + strong artifacts. Also: **commit + push every code change as
+KiwooShin** (author `kiwoo.shin@berkeley.edu`, not the orchestrator identity) so it
+counts as contributions.
+
+| Experiment (this cycle) | Verdict | Metric |
+| --- | --- | --- |
+| Lever-1 officials aux-guard ablation (n=3) | capped-aux WINS | capped-aux **38.0** (SFP officials robust ~40) vs v2_wide guarded-no-aux **24.8** (catastrophic near-0: official_1 0.2/12.1/13.9). The learned port-bearing head is ESSENTIAL to the guarded recovery, not a suppressor. |
+| SC scoring-frame bug (Lever 3) | **FIXED + pushed** (cbcaede) | `port_name: sc_port_{N}` → nonexistent frame `sc_port_{N}_link` → TF fail → every SC trial = tier_1=**1.0** for ANY policy. Fix → `sc_port_base` on 24 eval_suite + 6 smoke60 SC configs + generator `suite.py` + regression test. Expected SC **1.0 → ~33** (verify n=3 running). |
+
+Correction for the record: the historical v2_wide "**119.4/300** on officials" is
+**3×~40 proximity**, NOT a real seat — no config seats the officials.
+
+**What's missing:** the hard-pose seat (unreachable, fully documented — camera-resolution
+cap 22.7 mm far / 49 mm stall vs ~2–5 mm needed). Otherwise the remaining gap is
+**showcase packaging** of the work, not more score.
+
+**Next 4 h (showcase plan, 2 analysis agents):** (1) SC-fix **n=3 verification** running
+(smoke60 SC configs → before/after 1.0→~33; ~02:00). (2) **Technical writeup/dashboard**
+(HTML) — highest ROI: lead with the 5-family insertion scorecard (0/~175) + the money
+figure (localization error vs distance-to-port 22.7/45.9/49.0 mm against the 2–5 mm
+capture-radius line = structural camera cap), the capped-aux ablation bar, a guarded
+force/travel timeline, and a literature table (InsertionNet 2104.14223, IndustReal
+2305.17110, AutoMate 2407.08028, HIL-SERL 2410.21845). (3) **Demo video** — multi-panel
+montage (oracle seat → learned approach → guarded recovery → honest near-stall →
+localization-failure viz); `make_video.py` alone is insufficient. **Deferred:** dead-band
+retrain (5–7 h, uncertain, real regression risk to the banked anchors). Ensembling stays
+retired.
+
 ## 2026-07-20 20:30 — Run #3 cycle 3: INSERTION RETIRED (all sensor-legal paths exhausted); pivot to raise-avg
 
 **Avg score:** hard/stratified poses still **0 seats** (~175 trials). The banked

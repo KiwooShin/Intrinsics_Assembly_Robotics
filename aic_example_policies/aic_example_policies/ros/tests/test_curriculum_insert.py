@@ -1,0 +1,86 @@
+#  Copyright (C) 2026 Intrinsic Innovation LLC  (Apache-2.0)
+#
+"""Unit tests for the pure helpers in ``CurriculumInsert`` (ROS/torch-free)."""
+from __future__ import annotations
+
+import math
+import unittest
+
+import numpy as np
+
+from aic_example_policies.ros import CurriculumInsert as ci
+
+
+class LateralOffsetVectorTest(unittest.TestCase):
+    """``lateral_offset_vector`` geometry and validation."""
+
+    def test_zero_offset_is_zero_vector(self) -> None:
+        np.testing.assert_allclose(ci.lateral_offset_vector(0.0, 37.0), [0.0, 0.0])
+
+    def test_magnitude_and_azimuth(self) -> None:
+        v = ci.lateral_offset_vector(13.0, 0.0)
+        np.testing.assert_allclose(v, [0.013, 0.0], atol=1e-12)
+        v = ci.lateral_offset_vector(5.0, 90.0)
+        np.testing.assert_allclose(v, [0.0, 0.005], atol=1e-12)
+        v = ci.lateral_offset_vector(2.0, 45.0)
+        self.assertAlmostEqual(float(np.hypot(*v)), 0.002, places=12)
+        self.assertAlmostEqual(math.degrees(math.atan2(v[1], v[0])), 45.0, places=9)
+
+    def test_negative_offset_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            ci.lateral_offset_vector(-1.0, 0.0)
+
+
+class IntegrateChunkTargetsTest(unittest.TestCase):
+    """``integrate_chunk_targets`` receding-horizon integration."""
+
+    def _chunk(self, vz: float, k: int = 4) -> np.ndarray:
+        ch = np.zeros((k, 6))
+        ch[:, 2] = vz
+        return ch
+
+    def test_shape_and_orientation_held(self) -> None:
+        quat = np.array([0.1, 0.2, 0.3, 0.9])
+        out = ci.integrate_chunk_targets(
+            np.zeros(3), quat, self._chunk(-0.01), exec_steps=4, dt=0.275, substeps=5
+        )
+        self.assertEqual(out.shape, (20, 7))
+        np.testing.assert_allclose(out[:, 3:], np.tile(quat, (20, 1)))
+
+    def test_pure_descent_integrates_cumulatively(self) -> None:
+        dt = 0.275
+        out = ci.integrate_chunk_targets(
+            np.array([0.4, 0.1, 0.2]), np.array([0, 0, 0, 1.0]),
+            self._chunk(-0.012), exec_steps=4, dt=dt, substeps=5,
+        )
+        # Final target: z descends by 4 * v * dt; xy unchanged.
+        np.testing.assert_allclose(out[-1, :3],
+                                   [0.4, 0.1, 0.2 - 4 * 0.012 * dt], atol=1e-12)
+        # Monotone descent across the interpolated stream.
+        self.assertTrue(np.all(np.diff(out[:, 2]) < 0))
+
+    def test_substep_interpolation_is_linear(self) -> None:
+        out = ci.integrate_chunk_targets(
+            np.zeros(3), np.array([0, 0, 0, 1.0]),
+            self._chunk(-0.01, k=1), exec_steps=1, dt=1.0, substeps=4,
+        )
+        np.testing.assert_allclose(out[:, 2], [-0.0025, -0.005, -0.0075, -0.01],
+                                   atol=1e-12)
+
+    def test_validation(self) -> None:
+        with self.assertRaises(ValueError):
+            ci.integrate_chunk_targets(np.zeros(3), np.zeros(4),
+                                       np.zeros((4, 5)), 4, 0.1, 5)
+        with self.assertRaises(ValueError):
+            ci.integrate_chunk_targets(np.zeros(3), np.zeros(4),
+                                       self._chunk(-0.01), 5, 0.1, 5)
+        with self.assertRaises(ValueError):
+            ci.integrate_chunk_targets(np.zeros(3), np.zeros(4),
+                                       self._chunk(-0.01), 4, 0.0, 5)
+        with self.assertRaises(ValueError):
+            ci.integrate_chunk_targets(np.zeros(3), np.zeros(4),
+                                       self._chunk(-0.01), 4, 0.1, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

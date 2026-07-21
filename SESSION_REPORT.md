@@ -1202,3 +1202,21 @@ scored subset suffices for the curve; noted for harness hardening). M3 running:
 24 offset-staged ORACLE demos (0.5-4mm x 8 azimuths — demos that CONTAIN the
 correction) -> retrain (77+24) -> resweep 1/2/4mm. Refs: IndustReal SBC 2305.17110,
 RFCL 2405.03379, AugInsert 2410.14968 (F/T largest ablation hit — reproduced here).
+
+## 2026-07-21 15:30 — RUN #4: m3c fixes the regression (lat1 3/3); capture still [1,2)mm; mechanism found
+
+| Arm (staged official_2, n=3) | Seats | Totals |
+| --- | --- | --- |
+| m1 @ lat1 (A/B control) | 3/3 | 94/93/94 |
+| m3 @ lat1 (77+19 corpus) | 1/3 | 94 / 43-drift / unscored |
+| m3c @ lat1 (pushin 8) | **3/3** | 94/93/94 |
+| m3c @ lat2 | 0/3 | 1/1/43 |
+
+m3c (--pushin-weight 8) repairs the m3 corpus-dilution regression: matches m1 at
+lat1 while carrying the corrective demos. Capture stays [1,2)mm. MECHANISM of the
+2mm wall identified: the offset-staged oracle corrects IN FREE SPACE during its
+descent (impedance snaps to true xy within ~1-2 frames from 20mm standoff), so the
+demos never contain RIM-CONTACT RECOVERY — precisely the skill a 2mm-off specialist
+needs at the mouth. Next: LATE-CORRECTION demos (descend at the offset xy to ~5mm
+above the mouth, THEN correct laterally, then seat) = in-contact/near-contact
+correction content. m3c ADOPTED as current best (insert_m3c_wrench_k4.pt).

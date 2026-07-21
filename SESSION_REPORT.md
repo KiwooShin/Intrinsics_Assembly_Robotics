@@ -1090,3 +1090,25 @@ dead-band cfg_000/004/008 (15-suite +1.0 floor) + cfg_001 (ab5 -7.0) via collect
 poses -> PLAIN warm-start retrain of v2_wide (not aux-probe, not wrench/tail-trim), n>=3
 gate. (3) SC config-audit. (4) variance-stabilized guard lock. Ensembling stays retired.
 Still 0 hard-pose seats; capped-aux IQM 35.8 banked; v2_wide seats on submission config.
+
+## 2026-07-20 23:20 — Run #3 cycle 4: Lever-1 officials ablation (capped-aux essential) + showcase reframe
+
+USER DIRECTIVE (2026-07-20 ~22:30): NOT submitting to the AIC portal — this run
+showcases robotics ability. Drop all submission/packaging work; optimize for
+measurable improvements + strong artifacts (technical writeup + demo video). The
+rigorous insertion post-mortem is the crown-jewel showcase piece.
+
+LEVER 1 — officials n=3, aux-guard ablation (results/subm_cappedaux vs subm_v2guarded):
+| Config | official_1 | official_2 | official_3(SC) | overall |
+| ------ | ---------- | ---------- | -------------- | ------- |
+| capped-aux (guard + aux-bearing) | 40.2 (39.5-41.0) | 40.7 | 33.1 | 38.0 |
+| v2_wide guarded, NO aux | 8.7 (0.2,12.1,13.9) | 27.8 (incl 1.0) | 37.8 | 24.8 |
+Finding: the learned port-bearing head does NOT suppress — it is ESSENTIAL to the
+guarded recovery. Without it the scripted descent fails catastrophically (near-0 on
+official_1); with it the SFP officials are robust ~40 and low-variance. capped-aux
+38.0 vs guard-no-aux 24.8 at n=3 — clean signal >> sim noise. (Correction: v2_wide
+"119.4/300" on officials = ~40/trial PROXIMITY, not a real seat; 3x40≈120.) capped-aux
+stays the adopted config. SC official_3 slightly favors no-aux (37.8 vs 33.1) — aux
+bearing marginally hurts SC, consistent with SC being config-frame-limited (Lever 3).
+Sim cleaned (0 procs). Still 0 hard-pose seats (retired). Next: SC config fix / dead-band
+retrain as the measurable showcase win, + demo video + technical writeup.

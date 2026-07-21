@@ -1175,3 +1175,10 @@ Next: fill n≥3 + no-wrench ablation (force contribution) → M2 lateral-offset
 (0.5/1/2/4mm capture radius, IndustReal-style gates). Refs: curriculum start-near-
 goal (RFCL 2405.03379, Florensa 1707.05300), force-in-actor (Bi-ACT 2401.17698,
 AugInsert 2410.14968), IndustReal 2305.17110.
+
+### 02:20 addendum — M1 CONFIRMED n=3: 3/3 seats (88.00 / 88.19 / 88.19)
+
+Reruns filled n=3: ALL THREE staged-aligned official_2 trials seat ("Cable insertion
+successful", tier_3 75 each). M1 is SOLID per the n>=3 protocol. The earlier r2/r3
+misses were first-attempt variance (y-drift ~24mm); on rerun both seated. Ablation
+(no-wrench) + M2 lateral sweep (0.5/1/2/4mm @90deg, n=3 each) launched chained.

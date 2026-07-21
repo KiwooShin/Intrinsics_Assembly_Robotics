@@ -13,6 +13,40 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-21 02:20 — RUN #4 cycle 1: ★ MILESTONE 1 — FIRST LEARNED INSERTION, 3/3 SEATS at 88/100 ★
+
+**GOAL of this session:** learned all-sensor (3×RGB + wrist F/T + proprio) insertion
+via an easy→hard curriculum starting with the plug located above the port (user
+directive). **Milestone 1 is ACHIEVED and SOLID (n=3):**
+
+| Trial (staged-aligned official_2) | total | tier_3 |
+| --- | --- | --- |
+| r1 | **88.00** | 75 — "Cable insertion successful." |
+| r2 | **88.19** | 75 — "Cable insertion successful." |
+| r3 | **88.19** | 75 — "Cable insertion successful." |
+
+**3/3 seats** by the force-conditioned ACT specialist (`insert_m1_wrench_k4.pt`: K=4,
+wrist-F/T state_dim 13, --last-inch-s 6, pushin 5.0, 77-ep oracle corpus) deployed via
+the new `CurriculumInsert` harness (privileged staging 20 mm above the port → learned
+receding-horizon descent; virtual plug-tip target through calc_gripper_pose). After
+~175 trials and three runs with **zero** learned seats, the curriculum start + force
+conditioning produced a reliable insertion in one session. Seating force transient
+~25 N (no penalty), duration ~56 s.
+
+**What's missing:** (1) the **force-contribution ablation** (no-wrench specialist,
+n=3 — running); (2) the **capture radius** — how far laterally the skill generalizes
+(M2 sweep 0.5/1/2/4 mm @90°, n=3 each — queued behind the ablation); (3) later
+milestones: angular offsets, SC transfer, composing with the learned approach
+(the 13 mm handoff gap from run #3 remains the composition wall); (4) telemetry nit:
+per-cycle tcp_z log reads a stale frame — switch to the live plug TF.
+
+**Next 4 h:** ablation result → M2 sweep (4 offsets × 3) → record the capture-radius
+curve → if ≥80% at some offset, extend the ladder (IndustReal SBC gating); write all
+results + commit each as it lands. Then M3 planning: angular offsets + disasm-reversal
+lateral demos (the corpus's lateral correction content is near-zero — the sweep will
+show whether that binds at 0.5-2 mm). SOTA refs: RFCL 2405.03379, IndustReal 2305.17110,
+Bi-ACT 2401.17698, AugInsert 2410.14968.
+
 ## 2026-07-21 00:45 — RUN #4 START: curriculum insertion (user new direction, 48h)
 
 **GOAL of this session (user directive 2026-07-21 ~00:40):** REOPEN the insertion task

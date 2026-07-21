@@ -1182,3 +1182,23 @@ Reruns filled n=3: ALL THREE staged-aligned official_2 trials seat ("Cable inser
 successful", tier_3 75 each). M1 is SOLID per the n>=3 protocol. The earlier r2/r3
 misses were first-attempt variance (y-drift ~24mm); on rerun both seated. Ablation
 (no-wrench) + M2 lateral sweep (0.5/1/2/4mm @90deg, n=3 each) launched chained.
+
+## 2026-07-21 07:00 — RUN #4: complete M2 capture-radius curve — [1, 2) mm
+
+| staged offset (official_2) | seats | totals | note |
+| --- | --- | --- | --- |
+| 0 (aligned), wrench | 3/3 | 88/88/88 | M1 |
+| 0 aligned, NO wrench | 1/2 scored | 87 seat; 51 partial@50mm | force load-bearing |
+| 0.5mm | 1/1 scored | 91 | seats |
+| 1.0mm | 3/3 | 88/88/88 | seats reliably |
+| 2.0mm | 0/2 | 34/38 (ends 50-60mm away) | beyond capture |
+| 4.0mm | 0/2 | 42/42 (ends ~40mm away) | beyond capture |
+
+Learned capture radius ∈ [1, 2) mm for the M1 specialist trained on pure-vertical
+oracle demos — matches the research prediction (no lateral-correction signal to
+imitate; beyond capture the policy DRIFTS AWAY rather than searching). Residual
+scoring flakiness ~20% of trials (engine scoring.yaml write absent even at 1300s cap;
+scored subset suffices for the curve; noted for harness hardening). M3 running:
+24 offset-staged ORACLE demos (0.5-4mm x 8 azimuths — demos that CONTAIN the
+correction) -> retrain (77+24) -> resweep 1/2/4mm. Refs: IndustReal SBC 2305.17110,
+RFCL 2405.03379, AugInsert 2410.14968 (F/T largest ablation hit — reproduced here).

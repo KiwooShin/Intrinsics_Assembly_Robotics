@@ -1,0 +1,308 @@
+<title>Sub-Millimeter Connector Insertion — A Systematic Study</title>
+<style>
+  :root{
+    --bg:#f5f7f9; --surface:#ffffff; --surface-2:#eef1f5; --ink:#111720; --muted:#5a6472;
+    --line:#e0e5eb; --accent:#0d7d74; --accent-soft:#0d7d7418;
+    --seat:#157f4a; --miss:#c0492f; --warn:#a9781a;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0c1015; --surface:#141b23; --surface-2:#1b232d; --ink:#e9eef5; --muted:#94a1b1;
+      --line:#232d38; --accent:#31cfc0; --accent-soft:#31cfc01f;
+      --seat:#43c483; --miss:#ec7a61; --warn:#e2b658;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#f5f7f9; --surface:#ffffff; --surface-2:#eef1f5; --ink:#111720; --muted:#5a6472;
+    --line:#e0e5eb; --accent:#0d7d74; --accent-soft:#0d7d7418;
+    --seat:#157f4a; --miss:#c0492f; --warn:#a9781a;
+  }
+  :root[data-theme="dark"]{
+    --bg:#0c1015; --surface:#141b23; --surface-2:#1b232d; --ink:#e9eef5; --muted:#94a1b1;
+    --line:#232d38; --accent:#31cfc0; --accent-soft:#31cfc01f;
+    --seat:#43c483; --miss:#ec7a61; --warn:#e2b658;
+  }
+  *{box-sizing:border-box}
+  body{margin:0}
+  .wrap{background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;
+    -webkit-font-smoothing:antialiased;padding:0 20px}
+  .col{max-width:940px;margin:0 auto}
+  .prose{max-width:70ch}
+  h1,h2,h3{line-height:1.15;text-wrap:balance;font-weight:650;letter-spacing:-0.02em}
+  h1{font-size:clamp(1.9rem,4.6vw,3rem);margin:0 0 .5rem}
+  h2{font-size:clamp(1.3rem,3vw,1.75rem);margin:3.4rem 0 1rem;letter-spacing:-0.015em}
+  h3{font-size:1.05rem;margin:1.8rem 0 .5rem;letter-spacing:0}
+  p{margin:0 0 1rem;color:var(--ink)}
+  a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent-soft)}
+  .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--accent);font-weight:600}
+  .lede{font-size:1.16rem;color:var(--muted);max-width:64ch}
+  .muted{color:var(--muted)}
+  .rule{height:1px;background:var(--line);border:0;margin:0}
+  header.hero{padding:clamp(3rem,8vh,6rem) 0 2.2rem;border-bottom:1px solid var(--line)}
+  .meta{font-family:var(--mono);font-size:.8rem;color:var(--muted);margin-top:1.6rem;
+    display:flex;flex-wrap:wrap;gap:.4rem 1.4rem}
+  .meta b{color:var(--ink);font-weight:600}
+
+  /* stat strip */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
+    background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:2.2rem 0}
+  .stat{background:var(--surface);padding:1.1rem 1.15rem}
+  .stat .n{font-family:var(--mono);font-size:1.62rem;font-weight:600;letter-spacing:-.02em;
+    font-variant-numeric:tabular-nums}
+  .stat .l{font-size:.82rem;color:var(--muted);margin-top:.15rem}
+  .stat .n.good{color:var(--seat)} .stat .n.bad{color:var(--miss)} .stat .n.acc{color:var(--accent)}
+
+  /* cards / figures */
+  .fig{background:var(--surface);border:1px solid var(--line);border-radius:14px;
+    padding:1.4rem 1.4rem 1.1rem;margin:1.4rem 0}
+  .fig h3{margin:0 0 .2rem}
+  .fig .cap{font-size:.86rem;color:var(--muted);margin:.1rem 0 1rem;max-width:74ch}
+  .fig figcaption{font-size:.82rem;color:var(--muted);margin-top:.7rem}
+  svg{display:block;width:100%;height:auto}
+  .chart-note{font-family:var(--mono);font-size:.75rem;color:var(--muted)}
+
+  /* table */
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;margin:1.2rem 0}
+  table{border-collapse:collapse;width:100%;font-size:.9rem;min-width:560px}
+  th,td{text-align:left;padding:.62rem .85rem;border-bottom:1px solid var(--line)}
+  thead th{background:var(--surface-2);font-size:.74rem;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--muted);font-weight:600}
+  tbody tr:last-child td{border-bottom:0}
+  td.num,th.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .pill{display:inline-block;font-family:var(--mono);font-size:.72rem;padding:.12rem .5rem;border-radius:999px;
+    font-weight:600;white-space:nowrap}
+  .pill.dead{background:color-mix(in srgb,var(--miss) 15%,transparent);color:var(--miss)}
+  .pill.ok{background:color-mix(in srgb,var(--seat) 16%,transparent);color:var(--seat)}
+  .pill.warn{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
+  code{font-family:var(--mono);font-size:.86em;background:var(--surface-2);padding:.1rem .35rem;border-radius:5px}
+
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+  @media(max-width:680px){.two{grid-template-columns:1fr}}
+  .callout{border-left:3px solid var(--accent);background:var(--accent-soft);padding:.9rem 1.1rem;
+    border-radius:0 10px 10px 0;margin:1.3rem 0}
+  .callout b{color:var(--ink)}
+  footer{border-top:1px solid var(--line);margin-top:4rem;padding:2rem 0 3rem;color:var(--muted);font-size:.85rem}
+  .kv{font-family:var(--mono);font-size:.82rem;color:var(--muted)}
+  ol.method{counter-reset:s;list-style:none;padding:0;margin:1rem 0}
+  ol.method li{position:relative;padding:.5rem 0 .5rem 2.4rem;border-bottom:1px solid var(--line)}
+  ol.method li:last-child{border-bottom:0}
+  ol.method li::before{counter-increment:s;content:counter(s,decimal-leading-zero);position:absolute;left:0;top:.5rem;
+    font-family:var(--mono);font-size:.8rem;color:var(--accent);font-weight:600}
+  .lit{font-size:.82rem}
+  .theme-btn{position:fixed;top:14px;right:14px;font-family:var(--mono);font-size:.72rem;
+    background:var(--surface);color:var(--muted);border:1px solid var(--line);border-radius:8px;
+    padding:.35rem .6rem;cursor:pointer}
+</style>
+
+<button class="theme-btn" id="tbtn" aria-label="Toggle theme">◐ theme</button>
+<div class="wrap">
+<div class="col">
+
+  <header class="hero">
+    <div class="eyebrow">Robotics · Imitation Learning · Manipulation</div>
+    <h1>Learning Sub-Millimeter Connector Insertion — and proving where it hits a wall</h1>
+    <p class="lede">A UR5e learns to insert SFP/SC fiber-optic plugs into NIC-card ports (~2&nbsp;mm bore, sub-millimeter clearance) in a Gazebo simulation scored 0–100 per trial. The learned policy reaches the port reliably; the final seat does not. This is the study of <b>why</b> — a systematic, literature-grounded elimination that turns a negative result into a hard root cause.</p>
+    <div class="meta">
+      <span><b>Platform</b> UR5e · Gazebo · ROS 2</span>
+      <span><b>Policy</b> ACT visuomotor (RGB×3 + proprioception)</span>
+      <span><b>Metric</b> matched-seed suite, IQM + bootstrap CI, n≥3</span>
+      <span><b>Scope</b> ~175 in-sim insertion trials</span>
+    </div>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><div class="n acc">~40<span style="font-size:.6em">/100</span></div><div class="l">Proximity reached on SFP officials (policy works up to the last inch)</div></div>
+    <div class="stat"><div class="n good">36→119</div><div class="l">Controller fix (velocity→position mode), /300 on the officials</div></div>
+    <div class="stat"><div class="n bad">0 / 175</div><div class="l">Full seats on hard poses — the honest result, root-caused below</div></div>
+    <div class="stat"><div class="n">22.7&nbsp;mm</div><div class="l">Best-case port-localization error (vs ~2–5&nbsp;mm needed to seat)</div></div>
+  </div>
+
+  <div class="prose">
+  <h2>The task, and why it is hard</h2>
+  <p>Each trial spawns a task board at a randomized pose. The arm, holding a fiber plug, must reach the correct port and seat it. Scoring is tiered: <b>tier&nbsp;1</b> for reaching the workspace, <b>tier&nbsp;2</b> for proximity to the port mouth, <b>tier&nbsp;3</b> for a genuine insertion (a physics touch-latch that welds the plug). The bore is about 2&nbsp;mm with sub-millimeter clearance — a classic high-precision peg-in-hole, but with two constraints that decide everything:</p>
+  <ul>
+    <li><b>The last inch is occluded.</b> As the plug approaches, the plug body itself blocks the cameras' view of the port.</li>
+    <li><b>Ground-truth port pose is training-only.</b> Reading the port's <code>/tf</code> during evaluation is disqualifying "state leaking" — the deployed policy must localize from its own sensors.</li>
+  </ul>
+  </div>
+
+  <h2>The system that was built</h2>
+  <div class="prose">
+  <p>The deployed stack is an <b>Action-Chunking Transformer (ACT)</b> visuomotor policy — three RGB views plus joint proprioception in, short action chunks out — layered with a <b>force-aware guarded descent</b> and a <b>learned port-bearing head</b> that estimates the residual port direction at a stall. A key early fix unlocked the whole approach:</p>
+  </div>
+  <div class="callout">
+    <b>Controller root cause.</b> The stock <code>MODE_VELOCITY</code> integrates the reference open-loop, so the arm drifts and freezes. Switching the deployment to receding-horizon <code>MODE_POSITION</code> took the officials from <b>36 → 119 / 300</b>. This is why the policy reaches proximity at all.
+  </div>
+
+  <div class="fig">
+    <h3>Ablation — the learned port-bearing head is essential to the guarded recovery</h3>
+    <div class="cap">Officials, n=3 each, matched seeds, ensembling off. Removing the aux-bearing head (leaving only the scripted guarded descent) collapses two of three officials to near-zero — the scripted descent pushes in the wrong direction without a learned bearing.</div>
+    <!-- grouped bar chart -->
+    <svg viewBox="0 0 720 300" role="img" aria-label="Grouped bar chart: capped-aux vs guarded-no-aux on officials">
+      <!-- y grid 0..50 -->
+      <g font-family="var(--mono)" font-size="11" fill="var(--muted)">
+        <line x1="60" y1="250" x2="700" y2="250" stroke="var(--line)"/>
+        <line x1="60" y1="200" x2="700" y2="200" stroke="var(--line)"/>
+        <line x1="60" y1="150" x2="700" y2="150" stroke="var(--line)"/>
+        <line x1="60" y1="100" x2="700" y2="100" stroke="var(--line)"/>
+        <line x1="60" y1="50"  x2="700" y2="50"  stroke="var(--line)"/>
+        <text x="52" y="254" text-anchor="end">0</text>
+        <text x="52" y="204" text-anchor="end">10</text>
+        <text x="52" y="154" text-anchor="end">20</text>
+        <text x="52" y="104" text-anchor="end">30</text>
+        <text x="52" y="54"  text-anchor="end">40</text>
+      </g>
+      <!-- groups: official_1, official_2, official_3, overall. baseline y=250, scale 5px/pt -->
+      <!-- capped-aux (accent): 40.2,40.7,33.1,38.0 ; guard-no-aux (muted): 8.7,27.8,37.8,24.8 -->
+      <g>
+        <!-- g1 x=110 -->
+        <rect x="96"  y="49"  width="34" height="201" fill="var(--accent)"/>
+        <rect x="134" y="206" width="34" height="44"  fill="var(--muted)" opacity=".55"/>
+        <!-- g2 x=260 -->
+        <rect x="246" y="46"  width="34" height="204" fill="var(--accent)"/>
+        <rect x="284" y="111" width="34" height="139" fill="var(--muted)" opacity=".55"/>
+        <!-- g3 x=410 -->
+        <rect x="396" y="85"  width="34" height="165" fill="var(--accent)"/>
+        <rect x="434" y="61"  width="34" height="189" fill="var(--muted)" opacity=".55"/>
+        <!-- overall x=560 -->
+        <rect x="546" y="60"  width="34" height="190" fill="var(--accent)"/>
+        <rect x="584" y="126" width="34" height="124" fill="var(--muted)" opacity=".55"/>
+      </g>
+      <g font-family="var(--mono)" font-size="11" font-weight="600" fill="var(--ink)" text-anchor="middle">
+        <text x="113" y="42">40.2</text><text x="151" y="199">8.7</text>
+        <text x="263" y="39">40.7</text><text x="301" y="104">27.8</text>
+        <text x="413" y="78">33.1</text><text x="451" y="54">37.8</text>
+        <text x="563" y="53">38.0</text><text x="601" y="119">24.8</text>
+      </g>
+      <g font-family="var(--sans)" font-size="12" fill="var(--muted)" text-anchor="middle">
+        <text x="132" y="270">official_1</text>
+        <text x="282" y="270">official_2</text>
+        <text x="432" y="270">official_3 (SC)</text>
+        <text x="582" y="270" font-weight="600" fill="var(--ink)">overall</text>
+      </g>
+      <!-- legend -->
+      <g font-family="var(--sans)" font-size="12">
+        <rect x="60" y="286" width="12" height="12" fill="var(--accent)"/>
+        <text x="78" y="296" fill="var(--ink)">capped-aux (guard + learned bearing) · 38.0</text>
+        <rect x="360" y="286" width="12" height="12" fill="var(--muted)" opacity=".55"/>
+        <text x="378" y="296" fill="var(--ink)">guarded, no aux head · 24.8</text>
+      </g>
+    </svg>
+    <figcaption>Signal well above the measured sim-noise floor (per-config sd 3–18 pts), so adoption uses n≥3 with bootstrap CIs throughout.</figcaption>
+  </div>
+
+  <h2>The insertion investigation</h2>
+  <div class="prose">
+  <p>Reaching the mouth is solved; <b>closing the final ~13&nbsp;mm laterally is not</b>. Rather than tune endlessly, the work treats "can this rig seat a plug?" as a set of falsifiable hypotheses and eliminates them one by one. Five independent method families, zero seats on the hard poses:</p>
+  </div>
+
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr>
+      <th>Method family</th><th>Mechanism</th><th class="num">Best result</th><th>Why it fails</th>
+    </tr></thead>
+    <tbody>
+      <tr><td>Vision localization (DAgger)</td><td>Regress port offset on the policy's own stall distribution</td><td class="num">22.7&nbsp;mm</td><td>Camera-resolution cap — see figure</td></tr>
+      <tr><td>Oracle aux-bearing head</td><td>Supervised bearing from privileged views</td><td class="num">0.86&nbsp;cm→15–61&nbsp;mm</td><td>Covariate shift + occlusion at deploy</td></tr>
+      <tr><td>Scripted spiral / Lissajous search</td><td>Blind constant-force search from the stall</td><td class="num">0 / 3</td><td>Friction wall (K≈350 N/m); pitch 9&nbsp;mm ≫ 2&nbsp;mm bore</td></tr>
+      <tr><td>Disassembly-reversal specialist</td><td>Seat→perturbed-retract→time-reverse into demos</td><td class="num">13→40–50&nbsp;mm</td><td>Blind direction; pure-vertical oracle last-inch</td></tr>
+      <tr><td>Force-reactive residual RL</td><td>F/T as sole feedback, learn a search</td><td class="num">—</td><td>0.05× RTF infeasible; flat-face contact = no gradient</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="fig">
+    <h3>The money figure — localization error is capped by camera resolution, not just occlusion</h3>
+    <div class="cap">Held-out port-localization error vs. true distance-to-port. If occlusion alone were the problem, error would fall sharply once the port is fully visible (far frames). It does drop — but only to <b>22.7&nbsp;mm</b>, still 4–5× above the force-reactive capture radius that a compliant seater can close. The 128&nbsp;px cameras simply cannot resolve a 2&nbsp;mm port at any range.</div>
+    <svg viewBox="0 0 720 380" role="img" aria-label="Localization lateral error vs distance to port">
+      <!-- axes -->
+      <line x1="60" y1="320" x2="700" y2="320" stroke="var(--muted)"/>
+      <line x1="60" y1="30"  x2="60"  y2="320" stroke="var(--muted)"/>
+      <!-- y ticks (error mm): 0..55 -> y=320..30 ; y(v)=320-(v/55)*290 -->
+      <g font-family="var(--mono)" font-size="11" fill="var(--muted)">
+        <line x1="60" y1="61.6" x2="700" y2="61.6" stroke="var(--line)"/><text x="52" y="65" text-anchor="end">49</text>
+        <line x1="60" y1="135.5" x2="700" y2="135.5" stroke="var(--line)"/><text x="52" y="139" text-anchor="end">35</text>
+        <line x1="60" y1="214.5" x2="700" y2="214.5" stroke="var(--line)"/><text x="52" y="218" text-anchor="end">20</text>
+        <text x="52" y="324" text-anchor="end">0</text>
+        <text x="18" y="180" transform="rotate(-90 18 180)" text-anchor="middle" fill="var(--ink)" font-size="12">lateral error (mm)</text>
+      </g>
+      <!-- x ticks distance mm 0..80 -> x=60..680 ; x(d)=60+(d/80)*620 -->
+      <g font-family="var(--mono)" font-size="11" fill="var(--muted)" text-anchor="middle">
+        <text x="230" y="338">22 mm</text><text x="370" y="338">40 mm</text><text x="564" y="338">65 mm</text>
+        <text x="380" y="360" fill="var(--ink)" font-family="var(--sans)" font-size="12">distance to port (mm) — plug approaching → occluding →</text>
+      </g>
+      <!-- capture-radius band (seatable): err 2..5 -> y 309.5..293.6 -->
+      <rect x="60" y="293.6" width="640" height="15.9" fill="var(--seat)" opacity=".16"/>
+      <line x1="60" y1="301.5" x2="700" y2="301.5" stroke="var(--seat)" stroke-dasharray="4 4"/>
+      <text x="694" y="290" text-anchor="end" font-family="var(--mono)" font-size="11" fill="var(--seat)">seatable · 2–5 mm capture radius</text>
+      <!-- trend line through points: near(230.5,61.6) mid(370,78) far(563.75,200.3) -->
+      <polyline points="230.5,61.6 370,78 563.75,200.3" fill="none" stroke="var(--accent)" stroke-width="2.5" opacity=".55"/>
+      <!-- points -->
+      <g>
+        <circle cx="230.5" cy="61.6" r="6" fill="var(--miss)"/>
+        <circle cx="370" cy="78" r="6" fill="var(--miss)"/>
+        <circle cx="563.75" cy="200.3" r="7" fill="var(--accent)"/>
+      </g>
+      <g font-family="var(--mono)" font-size="12" font-weight="600">
+        <text x="230.5" y="52" text-anchor="middle" fill="var(--ink)">49.0</text>
+        <text x="370" y="68" text-anchor="middle" fill="var(--ink)">45.9</text>
+        <text x="575" y="197" fill="var(--accent)">22.7 — best case</text>
+      </g>
+      <text x="575" y="215" font-family="var(--sans)" font-size="11" fill="var(--muted)">port fully visible, still 4.5× too coarse</text>
+    </svg>
+    <figcaption>Every sensor-legal path gated on the same missing quantity: a pre-contact port bearing to ~2–5&nbsp;mm. This rig lacks it — the RGB is low-resolution/occluded and the wrist F/T reads nothing until contact.</figcaption>
+  </div>
+
+  <div class="prose">
+  <h3>Grounded in the literature</h3>
+  <p class="lit muted">Every published method that seats sub-millimeter clearances carries at least one pre-contact lateral bearing that this rig does not have:</p>
+  </div>
+  <div class="tbl-wrap">
+  <table class="lit">
+    <thead><tr><th>Work</th><th>Required sensing</th><th>Present here?</th></tr></thead>
+    <tbody>
+      <tr><td>InsertionNet / 2.0 (2104.14223, 2203.01153)</td><td>Unoccluded eye-in-hand RGB seeing the hole</td><td><span class="pill dead">occluded</span></td></tr>
+      <tr><td>IndustReal (2305.17110), AutoMate (2407.08028)</td><td>Estimated peg+socket pose bounded to a few mm</td><td><span class="pill dead">22.7 mm</span></td></tr>
+      <tr><td>HIL-SERL (2410.21845)</td><td>Human-in-loop RL + in-hand camera</td><td><span class="pill dead">n/a</span></td></tr>
+      <tr><td>Seam-fill search (2204.07776)</td><td>Force spiral from &lt;5 mm offset</td><td><span class="pill warn">&gt;13 mm</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout">
+    <b>The negative result, stated precisely.</b> The seat is not blocked by a tuning gap or a training-data shortfall — it is blocked by a <b>structural sensor limit</b>: no pre-contact bearing to the 2–5&nbsp;mm precision every successful method requires. That conclusion is only trustworthy because five independent approaches were built, run, and falsified — including a disassembly-reversal pipeline whose two real bugs (a physics touch-latch welding the plug during data collection, and a time-reversal ordering error) were found and fixed before the method was fairly rejected.
+  </div>
+
+  <h2>Engineering along the way</h2>
+  <ol class="method">
+    <li><b>A scoring-frame bug that made an entire task class unwinnable.</b> SC configs targeted a port frame name that did not exist, so the scoring TF lookup failed and <em>every</em> SC trial collapsed to 1.0/100 <em>for any policy, including a perfect one</em>. Root-caused to the <code>&lt;target_module&gt;/&lt;port_name&gt;_link</code> TF construction and fixed to the real <code>sc_port_base</code> frame across 30 configs + the suite generator + a regression test. Oracle score on a fixed SC pose: <b>1.0 → 93</b>.</li>
+    <li><b>Quantified the simulator's noise floor.</b> Same config + seed varies sd 3–18 points with proximity↔miss flips — so single-trial comparisons are meaningless. Every adoption decision uses n≥3 with IQM and bootstrap CIs.</li>
+    <li><b>Hardened the evaluation harness.</b> Process-group-scoped teardown, resumable batch evals with DONE markers, and detached-job orchestration — so a 48-hour autonomous run survives crashes and heartbeat gaps.</li>
+  </ol>
+
+  <div class="prose">
+  <h2>What this demonstrates</h2>
+  <p>A working visuomotor manipulation policy that reliably solves the reachable part of a contact-rich task; a force-aware recovery whose learned component is validated by ablation; and — the core of the work — a <b>disciplined, falsifiable investigation</b> that converts "it doesn't seat" into a specific, literature-anchored statement about the sensing the platform is missing. Knowing exactly why something is impossible on a given rig, and proving it, is as much an engineering result as making it work.</p>
+  </div>
+
+  <footer>
+    <div class="kv">UR5e · SFP/SC fiber insertion · Gazebo · ACT + guarded-aux recovery · autonomous multi-day research run</div>
+    <p style="margin-top:.6rem">Metric protocol: matched-seed in-sim eval suite, IQM + bootstrap CI, n≥3 per claim. All figures from this project's own runs. Honest scope: 0 full seats on the hard/stratified poses; ~40/100 proximity; the seat is retired with a documented root cause.</p>
+  </footer>
+
+</div>
+</div>
+<script>
+  (function(){
+    var b=document.getElementById('tbtn');
+    b&&b.addEventListener('click',function(){
+      var r=document.documentElement;
+      var cur=r.getAttribute('data-theme');
+      var dark=cur? cur==='dark' : matchMedia('(prefers-color-scheme:dark)').matches;
+      r.setAttribute('data-theme', dark?'light':'dark');
+    });
+  })();
+</script>

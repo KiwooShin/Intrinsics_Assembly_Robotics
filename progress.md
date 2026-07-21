@@ -13,6 +13,34 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-21 13:40 — RUN #4 cycle 4: scoring-race root-caused (2 fixes); m1-vs-m3 A/B running
+
+**GOAL:** learned all-sensor insertion via easy→hard curriculum (M1 3/3 seats; M2
+capture [1,2) mm; M3 corpus 19 offset demos + retrain). This cycle was **measurement
+integrity**: the m3 resweep returned 0/9 *unscored* — root-caused to a two-part
+harness race, both fixed and pushed:
+1. The engine writes `scoring.yaml` *after* the task-end log marker; the runner tore
+   the sim down on the marker, razing the score. Seated trials scored *during* the
+   policy phase and survived — so the race selectively erased non/late-seat trials
+   (a nasty measurement bias). Fix: wait for the scoring **file** before teardown
+   (b8c7889), plus longer waits/caps and a 20 s learned-phase budget (e544eb0).
+2. Log-reading traps documented: `grep -m1 score:` returns tier_1's 1.0 (hides
+   seats); cycle-8 v0z≈+1 mm/s is the *post-weld hold* signature of a seated trial,
+   not indecision.
+
+**Live m3 finding:** despite offline predictions identical to m1 (−10.7 vs −10.6
+mm/s on corpus frames), m3's live descent is ~5× slower and its one scored trial
+ended 50 mm away (drift). **A/B running** (m1 vs m3 at lat=1 mm, n=3, race-fixed
+harness) to separate a genuine training regression from harness artifacts.
+
+**What's missing:** the capture-v2 verdict (blocked on trustworthy scoring — now
+fixed); then the ladder ≥2 mm, angular, SC transfer, approach composition.
+
+**Next 4 h:** A/B verdict → if m1 seats & m3 doesn't: m3 training regression →
+rebalance (pushin 8 / corpus sampling) and retrain (~2 min) → resweep. If both seat:
+resume the m3 sweep at 2/4 mm. If neither: bisect the harness budget (20 s vs 45 s).
+Then: seat GIF, showcase update, memory. Commits: e544eb0, b8c7889 + this entry.
+
 ## 2026-07-21 09:40 — RUN #4 cycle 3: M2 curve final [1,2)mm; M3 offset demos collected (24/24) + m3 retrained
 
 **GOAL:** learned all-sensor insertion via easy→hard curriculum. M1 done (3/3 seats,

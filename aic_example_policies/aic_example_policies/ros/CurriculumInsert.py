@@ -344,10 +344,19 @@ try:  # pragma: no cover - exercised only inside the aic_model runtime.
                 f"(+{lat_mm:.1f}mm lateral) — handing off to specialist"
             )
 
-            # --- Phase 2: learned insertion (receding horizon, DeployACT-style).
+            # --- Phase 2: learned insertion (receding horizon). The specialist's
+            # twists integrate into a VIRTUAL plug-tip target (initialized at the
+            # hover point) commanded through the same ``calc_gripper_pose``
+            # machinery staging used. Anchoring at the virtual target rather than
+            # the raw ``controller_state.tcp_pose`` avoids the observed frame
+            # mismatch where obs-anchored MotionUpdate targets landed on the
+            # arm's current pose and produced zero motion (M1 eval, 2026-07-21:
+            # tcp_z frozen 40 cycles despite v0z=-11 mm/s predictions). ---
             spec = _SpecialistModel(ckpt)
             exec_steps = min(EXEC_STEPS, spec.K)
             dt_fine = DT_FRAME / SUBSTEPS
+            virt = hover.copy()
+            floor_z = port_tf.translation.z - 0.020  # hard floor: 20mm below mouth
             start = self.time_now()
             cycles = 0
             while (self.time_now() - start).nanoseconds * 1e-9 < budget_s:
@@ -355,30 +364,34 @@ try:  # pragma: no cover - exercised only inside the aic_model runtime.
                 if obs is None:
                     self.sleep_for(0.1)
                     continue
-                chunk, pos, quat = spec.predict_chunk(obs)
-                targets = integrate_chunk_targets(
-                    pos, quat, chunk, exec_steps, DT_FRAME, SUBSTEPS
-                )
-                for tgt in targets:
-                    pose = Pose(
-                        position=Point(x=float(tgt[0]), y=float(tgt[1]),
-                                       z=float(tgt[2])),
-                        orientation=Quaternion(x=float(tgt[3]), y=float(tgt[4]),
-                                               z=float(tgt[5]), w=float(tgt[6])),
-                    )
-                    self.set_pose_target(
-                        move_robot=move_robot, pose=pose,
-                        stiffness=POSE_STIFFNESS, damping=POSE_DAMPING,
-                    )
-                    self.sleep_for(dt_fine)
+                chunk, pos, _quat = spec.predict_chunk(obs)
+                for k in range(exec_steps):
+                    step = chunk[k, :3] * DT_FRAME
+                    for s in range(1, SUBSTEPS + 1):
+                        point = virt + step * (s / SUBSTEPS)
+                        point[2] = max(point[2], floor_z)
+                        try:
+                            self.set_pose_target(
+                                move_robot=move_robot,
+                                pose=self.calc_gripper_pose(
+                                    port_tf, target_position_base=point
+                                ),
+                                stiffness=POSE_STIFFNESS, damping=POSE_DAMPING,
+                            )
+                        except TransformException as ex:
+                            self.get_logger().warn(f"phase-2 TF failure: {ex}")
+                        self.sleep_for(dt_fine)
+                    virt = virt + step
+                    virt[2] = max(virt[2], floor_z)
                 cycles += 1
                 if cycles % 8 == 0:
                     self.get_logger().info(
                         f"CurriculumInsert: cycle {cycles} tcp_z={pos[2]:.3f} "
-                        f"v0z={chunk[0, 2] * 1000:+.1f}mm/s"
+                        f"virt_z={virt[2]:.3f} v0z={chunk[0, 2] * 1000:+.1f}mm/s"
                     )
             self.get_logger().info(
-                f"CurriculumInsert: budget elapsed after {cycles} cycles."
+                f"CurriculumInsert: budget elapsed after {cycles} cycles "
+                f"(virt_z={virt[2]:.3f})."
             )
             return True
 

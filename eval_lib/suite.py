@@ -278,7 +278,12 @@ def _apply_sc_target(
     task = trial["tasks"]["task_1"]
     task["plug_type"] = "sc"
     task["port_type"] = "sc"
-    task["port_name"] = f"sc_port_{port}"
+    # Scoring builds the port TF as taskBoard/<target_module_name>/<port_name>_link
+    # (aic_scoring/ScoringTier2). The SC seat frame is sc_port_base -- using
+    # sc_port_{port} here yields a nonexistent frame sc_port_{port}_link, the TF
+    # lookup fails, tier-2/3 never compute, and every SC trial collapses to
+    # tier_1=1.0 for ANY policy. target_module_name stays sc_port_{port} (the module).
+    task["port_name"] = "sc_port_base"
     task["target_module_name"] = f"sc_port_{port}"
 
 

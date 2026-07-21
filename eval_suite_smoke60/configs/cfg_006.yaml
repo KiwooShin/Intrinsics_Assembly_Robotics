@@ -145,7 +145,7 @@ trials:
         plug_type: sc
         plug_name: sc_tip
         port_type: sc
-        port_name: sc_port_0
+        port_name: sc_port_base
         target_module_name: sc_port_0
         time_limit: 60
 robot:

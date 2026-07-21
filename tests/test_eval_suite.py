@@ -13,6 +13,7 @@ import contextlib
 import io
 import math
 import os
+import random
 import signal
 import subprocess
 import tempfile
@@ -727,6 +728,37 @@ class TestProcessGroupReaping(unittest.TestCase):
                 0,
                 "reap left a bringup descendant alive",
             )
+
+
+class TestScSeatFrameRegression(unittest.TestCase):
+    """Guard the SC scoring-frame fix (2026-07-20).
+
+    Scoring builds the port TF as ``taskBoard/<target_module_name>/<port_name>_link``.
+    For SC the real seat frame is ``sc_port_base``; using ``sc_port_{port}`` yields a
+    nonexistent ``sc_port_{port}_link`` frame, the TF lookup fails, tier-2/3 never
+    compute, and every SC trial collapses to ``tier_1 == 1.0`` for any policy. This
+    test pins ``_apply_sc_target`` so a regenerated suite can never reintroduce it.
+    """
+
+    def _min_trial(self) -> dict:
+        return {
+            "scene": {"task_board": {
+                "sc_rail_0": {"entity_pose": {"translation": 0.0}},
+                "sc_rail_1": {"entity_pose": {"translation": 0.0}},
+            }},
+            "tasks": {"task_1": {}},
+        }
+
+    def test_port_name_is_sc_port_base_module_keeps_index(self) -> None:
+        for port in (0, 1):
+            trial = self._min_trial()
+            suite._apply_sc_target(trial, rail=0, port=port, rng=random.Random(0))
+            task = trial["tasks"]["task_1"]
+            self.assertEqual(
+                task["port_name"], "sc_port_base",
+                "SC port_name must be the real seat frame, not sc_port_{port}",
+            )
+            self.assertEqual(task["target_module_name"], f"sc_port_{port}")
 
 
 if __name__ == "__main__":

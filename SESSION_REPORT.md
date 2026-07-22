@@ -1395,3 +1395,42 @@ self-kill guard (`grep -vE "declare -f|cleanup_sim|run_trial|run_ep"`) so the pa
 match the `bash -c` wrapper whose cmdline embeds the function text. Lesson: per-trial teardown
 must kill the whole launch's node set (or process group), not a hand-listed subset — a missing
 node type is invisible until it OOMs the next training.
+
+## 2026-07-22 04:00 — RUN #4: the deeper bottleneck is PARTIAL OBSERVABILITY, not unimodal representation
+
+Before implementing the "clean fix" (a multimodal CVAE head), a Plan sub-agent scoped it AND
+assessed it adversarially, and an offline action-probe tested the premise. Both converge on a
+sharper conclusion.
+
+**CVAE assessment (Plan agent).** A CVAE/diffusion head learns p(a|h) instead of the median,
+but at deploy the posterior is unavailable (needs the ground-truth action), so the latent z
+must come from the PRIOR — an unconditioned sample uncorrelated with the true offset (z=0 just
+decodes the blended centroid again). No action-head class can manufacture an observable the
+input lacks. Honest odds: **~15%** it beats m3f on task score (mostly incidental), **~70%** it
+merely demonstrates the two modes exist. Same limitation for Diffusion Policy / VQ-BeT.
+
+**Action-probe (offline, no sim/train; `opt/action_probe.py`).** Ran m3c/m3e/m3f on stored
+early-descent frames bucketed by staged offset (0/1/2 mm), measuring the predicted first-action
+twist (lateral |vx,vy| vs vertical vz):
+
+| ckpt | 0 mm lat·vert | 1 mm | 2 mm |
+| --- | --- | --- | --- |
+| m3c | 0.46 · −18.8 | 0.37 · −26.6 | 0.36 · −27.4 |
+| m3e | 0.52 · −20.9 | 0.36 · −35.3 | 0.35 · −36.1 |
+| m3f | 0.51 · −20.3 | 0.42 · −34.7 | 0.45 · −33.8 |
+
+(mm/s). **At the ~20 mm standoff every policy commands near-pure vertical descent (lateral/vertical
+≈ 0.01–0.025) regardless of offset** — the lateral component is <0.5 mm/s and does not scale with
+offset (for m3c/m3e it even shrinks). The descend-vs-search behavior that separates the checkpoints
+is therefore NOT encoded in the standoff action; it is a downstream/near-contact phenomenon.
+
+**Conclusion (the sharpest, most correct version of the mechanism).** The offset is not in the
+observation at the standoff (probe) and cannot be recovered by any feedforward head (assessment).
+So this is **partial observability**, not just unimodal-median averaging: the only signal that
+disambiguates "descend straight" from "search out" is the **contact wrench**, which arrives at the
+mouth. The principled fix is therefore a **contact-gated closed loop** that reacts to the wrench
+spike within the K=4 re-inference loop — not a richer feedforward head (CVAE/diffusion would still
+sample an unconditioned mode at deploy). Decision: **do NOT implement the CVAE** — it would confirm
+a negative already well-supported and risk muddying a clean, sophisticated result. m3c stays
+champion; the showcase's closing analysis is upgraded to this observability framing. The action
+probe (`opt/action_probe.py`, `results/action_probe.json`) is committed as reproducible evidence.

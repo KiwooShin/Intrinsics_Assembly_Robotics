@@ -26,7 +26,7 @@ mkdir -p "$OUT/trials"
 
 cleanup_sim() {
   local pids
-  pids=$(ps aux | grep -E "gz sim|aic_model|aic_engine|component_container|rmw_zenohd" \
+  pids=$(ps aux | grep -E "gz sim|aic_model|aic_engine|aic_adapter|static_transform_publisher|component_container|rmw_zenohd" \
          | grep -v grep | awk '{print $2}')
   [ -n "$pids" ] && kill -9 $pids 2>/dev/null
   sleep 3

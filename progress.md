@@ -13,6 +13,35 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-21 21:40 — RUN #4 cycle 6: RAM-leak root-caused + fixed; m3d (late-correction) under eval
+
+**GOAL:** learned all-sensor insertion via easy→hard curriculum. Banked: M1 aligned
+**3/3 seats** (88→94); M2 capture **[1,2) mm**; wrench ablation; **m3c adopted**
+(lat1 3/3 @ 94).
+
+**This cycle — ops root-cause that unblocked everything:** the m3d retrain "failed"
+and its eval went vacuous (`Task not completed` = the policy crashing on a missing
+checkpoint). The real cause was **memory exhaustion: 76 leaked `aic_adapter` + 106
+leaked `static_transform_publisher` orphans (~0.5 GB each, one per past trial —
+`cleanup_sim` never matched them) ate ~90 GB of GB10 unified memory**, so training
+OOMed (3.2 GiB free of 121.7). Purged (3→57 GB available), widened the kill patterns
+in both runners, retrained m3d cleanly (3,056 frames incl. 9 late-correction demos).
+Second lesson banked: never run trainings in a foreground tool call (a 2-min timeout
+killed one) — always nohup + log.
+
+**m3d eval (running, verdict ~22:30):** early lat1 = 2/3 seats (92, 93). lat2/lat3
+pending — the real question is whether late-correction demos (descend at offset,
+correct at 5 mm, seat) extend capture ≥2 mm.
+
+**What's missing:** capture ≥2 mm (m3d verdict); SC transfer (needs the
+sc_entrance_waypoint staging axis in the harness); learned-seat GIF; approach
+composition (still far beyond capture).
+
+**Next 4 h:** m3d verdict → branch per time-box (m3e `correct_at=2` if promising and
+time allows; else freeze capture=[1,2) mm as the honest result) → begin polish:
+showcase-page M1–M3 update + artifact republish, learned-seat GIF (KEEP_BAG trial),
+memory + final writeup. Commits this cycle: b218548 (+ this entry).
+
 ## 2026-07-21 17:40 — RUN #4 cycle 5: m3c repairs regression (lat1 3/3@94); late-correction demos collected
 
 **GOAL:** learned all-sensor insertion via easy→hard curriculum. Standing results:

@@ -13,6 +13,42 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). **Newest (RUN #4 learn
 
 ---
 
+## 2026-07-22 09:40 — RUN #4 cycle 9: built the prescribed fix, honestly rejected it; milestone demos added
+
+**GOAL:** learned all-sensor curriculum insertion, as a *showcase*. This window carried the
+observability diagnosis through to its test — I built the contact-gated fix the diagnosis
+prescribed, then rigorously showed it *can't* work — and added milestone demo GIFs to the README.
+
+**Avg score (this window):** no new checkpoint adopted (research at its endpoint). Standing
+staged-official_2 results unchanged: m3c 0/1 mm 3/3 @94 (champion), m3f 1 mm 4/6 · 2 mm 3/6.
+The one new experiment was the **contact-gate** (`CURR_REACT_WRENCH_N`, env-gated force-deviation
+re-inference; 15/15 unit tests, gate-off byte-identical). Naive read looked like a win (2 mm gate-on
+5/6 vs off 3/6), but **isolation from the gate-off scoring messages overturned it**: every seat (both
+conditions) shows *"Insertion force above 20 N"* (contacted), every miss shows *"No excessive force
+detected"* (pre-contact drift). Same rule both ways — contact → seat, no-contact → miss — and the gate
+acts only *after* contact, so the 5-vs-3 was **sim variance, not the gate**. Verdict: **contact-gating
+does not causally help** (preliminary "fix works" corrected).
+
+**What's missing (now a fundamental statement, not a gap):** a *sensor-legal way to see the lateral
+offset before contact*. Once the plug contacts the port the seat is reliable — 100% of the residual
+failure is the offset-blind **approach**, and the disambiguating wrench signal arrives at the mouth,
+**too late** for a plug that has already drifted past. So no post-contact fix — not a multimodal head,
+not contact-gating — can close the gap; only pre-contact offset sensing could, which this rig lacks.
+The RUN #4 arc is therefore *complete and self-consistent*: dead-zone → unimodal-median mechanism →
+partial-observability root cause → build the fix → measure it → reject it, honestly.
+
+**Milestone demos (per the new standing directive):** a reusable `opt/make_milestone_gif.py`
+(title card + 3-cam rollout + result badge + caption; 5/5 tests) plus two fancy explained GIFs —
+`docs/media/milestone_first_seat.gif` (first learned seat, 93/100) and `milestone_offset_2mm.gif`
+(2 mm off-center seat, 92.7) — in a new README **Milestones** section.
+
+**Next 4 h:** maintenance. The research question is thoroughly exhausted (fix built, tested,
+honestly rejected); the interactive showcase + the README milestones are the deliverables. Keep the
+heartbeat + watchdog to the 07-23 00:40 stop; apply the milestone-demo directive to any future
+milestone or user request. Ops: the widened `cleanup_sim` held 0 orphans across every eval this
+window *and* the demo-footage capture. Commits this cycle: c82d209 · b5a9ec1 · 60ce653 (contact-gate
++ correction) · 5c74480 · 0152d11 (milestone tooling + GIFs + README).
+
 ## 2026-07-22 05:40 — RUN #4 cycle 8: m3f closes the loop; the real bottleneck is PARTIAL OBSERVABILITY (not the head)
 
 **GOAL:** learned all-sensor curriculum insertion, as a *showcase*. This window took the

@@ -69,6 +69,30 @@ def lateral_offset_vector(offset_mm: float, azimuth_deg: float) -> np.ndarray:
     return np.array([r * np.cos(a), r * np.sin(a)], dtype=np.float64)
 
 
+def wrench_force_mag(force_xyz: object) -> float:
+    """Return the Euclidean magnitude of a 3-D force vector, in newtons.
+
+    Used by the contact-gated early-re-inference option (``CURR_REACT_WRENCH_N``):
+    a spike above the threshold means the plug has touched the rim, so the learned
+    loop should re-infer with that contact observation instead of finishing a chunk
+    that was planned in free space.
+
+    Args:
+        force_xyz: The ``(fx, fy, fz)`` force components in newtons (any 3-element
+            array-like).
+
+    Returns:
+        ``sqrt(fx**2 + fy**2 + fz**2)`` as a float.
+
+    Raises:
+        ValueError: If ``force_xyz`` does not have exactly 3 elements.
+    """
+    f = np.asarray(force_xyz, dtype=np.float64).ravel()
+    if f.shape[0] != 3:
+        raise ValueError(f"force_xyz must have 3 elements, got shape {f.shape}")
+    return float(np.linalg.norm(f))
+
+
 def integrate_chunk_targets(
     position: np.ndarray,
     quaternion: np.ndarray,
@@ -421,6 +445,10 @@ try:  # pragma: no cover - exercised only inside the aic_model runtime.
             dt_fine = DT_FRAME / SUBSTEPS
             virt = hover.copy()
             floor_z = port_tf.translation.z - 0.020  # hard floor: 20mm below mouth
+            # Contact-gated early re-inference (CURR_REACT_WRENCH_N > 0 enables it):
+            # on a force spike mid-chunk, stop executing the free-space-planned chunk
+            # and re-infer with the contact observation. 0 = off => baseline behaviour.
+            react_n = _f("CURR_REACT_WRENCH_N", 0.0)
             start = self.time_now()
             cycles = 0
             while (self.time_now() - start).nanoseconds * 1e-9 < budget_s:
@@ -447,6 +475,15 @@ try:  # pragma: no cover - exercised only inside the aic_model runtime.
                         self.sleep_for(dt_fine)
                     virt = virt + step
                     virt[2] = max(virt[2], floor_z)
+                    if react_n > 0.0:
+                        ob = get_observation()
+                        if ob is not None:
+                            wf = ob.wrist_wrench.wrench.force
+                            if wrench_force_mag((wf.x, wf.y, wf.z)) > react_n:
+                                self.get_logger().info(
+                                    "CurriculumInsert: wrench-gate re-infer "
+                                    f"(|F|>{react_n:.1f}N) at chunk step k={k}")
+                                break
                 cycles += 1
                 if cycles % 8 == 0:
                     self.get_logger().info(

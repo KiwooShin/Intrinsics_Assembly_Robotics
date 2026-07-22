@@ -82,5 +82,27 @@ class IntegrateChunkTargetsTest(unittest.TestCase):
                                        self._chunk(-0.01), 4, 0.1, 0)
 
 
+class WrenchForceMagTest(unittest.TestCase):
+    """``wrench_force_mag`` magnitude + validation for the contact gate."""
+
+    def test_magnitude(self) -> None:
+        self.assertAlmostEqual(ci.wrench_force_mag((3.0, 4.0, 0.0)), 5.0)
+        self.assertAlmostEqual(ci.wrench_force_mag((0.0, 0.0, 0.0)), 0.0)
+        self.assertAlmostEqual(ci.wrench_force_mag((2.0, 3.0, 6.0)), 7.0)
+
+    def test_accepts_ndarray(self) -> None:
+        self.assertAlmostEqual(ci.wrench_force_mag(np.array([0.0, -5.0, 12.0])), 13.0)
+
+    def test_gate_threshold_semantics(self) -> None:
+        # A free-space reading stays under a typical threshold; a rim contact clears it.
+        self.assertLess(ci.wrench_force_mag((0.3, 0.2, 0.5)), 6.0)
+        self.assertGreater(ci.wrench_force_mag((1.0, 2.0, 8.0)), 6.0)
+
+    def test_bad_length_raises(self) -> None:
+        for bad in ((1.0, 2.0), (1.0, 2.0, 3.0, 4.0), np.zeros(1)):
+            with self.assertRaises(ValueError):
+                ci.wrench_force_mag(bad)
+
+
 if __name__ == "__main__":
     unittest.main()

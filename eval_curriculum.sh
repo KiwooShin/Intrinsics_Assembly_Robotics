@@ -48,6 +48,7 @@ run_trial() {  # unit trial_dir
   export CURR_LAT_AZIMUTH_DEG="${LAT_AZ_DEG:-0}"
   export CURR_STANDOFF_M="${STANDOFF_M:-0.02}"
   export CURR_BUDGET_S="${BUDGET_S:-20}"
+  export CURR_REACT_WRENCH_N="${REACT_N:-0}"  # 0 = off (baseline); >0 = contact-gated re-infer
 
   cleanup_sim
   ros2 run rmw_zenoh_cpp rmw_zenohd > /dev/null 2>&1 &
@@ -102,7 +103,7 @@ for r in $(seq 1 "$REPS"); do
   timeout --signal=INT --kill-after=30 "$TIMEOUT" \
     bash -c "$(declare -f cleanup_sim run_trial); CFG='$CFG' CKPT='$CKPT' \
              LAT_MM='${LAT_MM:-0}' LAT_AZ_DEG='${LAT_AZ_DEG:-0}' \
-             STANDOFF_M='${STANDOFF_M:-0.02}' BUDGET_S='${BUDGET_S:-20}' \
+             STANDOFF_M='${STANDOFF_M:-0.02}' BUDGET_S='${BUDGET_S:-20}' REACT_N='${REACT_N:-0}' \
              POLICY_PY='$POLICY_PY' run_trial '$UNIT' '$TDIR'"
   cleanup_sim
   if [ -f "$TDIR/scoring.yaml" ]; then

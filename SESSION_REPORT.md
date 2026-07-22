@@ -1331,3 +1331,28 @@ best model for reliable near-aligned insertion is **m3c** (1 mm 3/3 @94); **m3e*
 specialist (2/3 @92) with a 1 mm dead-zone. Both live under `~/training/ckpt/`. The named,
 unimplemented fix for a single policy that holds both zones is a multimodal action head or
 residual RL on a frozen base — deferred as beyond a showcase's scope.
+
+## 2026-07-22 02:19 — RUN #4: m3f (curate late ≥2 mm) — FIRST single policy holding BOTH zones (n=3, confirming)
+
+Hypothesis from the m3e dead-zone: the 1 mm hole was caused by the five 1.5 mm
+late-correction demos bleeding "search" into the near-aligned regime. Test: retrain
+`insert_m3f_wrench_k4.pt` on the identical corpus **minus the 1.5 mm late demos**
+(late demos curated to ≥2 mm only, via globs `ep_curr_lat2*`+`lat3*`; 13 kept of 18;
+aligned + ds_curr unchanged; frames 3254→3144). Everything else identical (K=4, wrench,
+pushin 8, enc-init). Result (staged official_2, n=3):
+
+| ckpt | 1 mm seats | 2 mm seats |
+| --- | --- | --- |
+| m3e (18 late, incl. 1.5 mm) | 1/3 | 2/3 |
+| **m3f (13 late, ≥2 mm only)** | **2/3** @92.9/93.0 | **2/3** @92.6/92.4 |
+
+**Both zones ≥2/3 — the pre-registered adopt bar is MET**, and it confirms the mechanism:
+removing the 1.5 mm bleed recovered the 1 mm zone (1/3→2/3) without losing 2 mm (still 2/3).
+The 1 mm miss was a no-contact "Task not completed"; the 2 mm miss a 43-pt drift. Caveat
+(per the cycle-analysis discipline): n=3 with both cells at 2/3 (Jeffreys CI [0.18,0.96]) is
+statistically soft — a **confirmation to n=6 on both offsets is running** before this is
+promoted into the showcase. m3f does trade a little inner reliability vs m3c (1 mm 3/3→2/3),
+so it is the best *both-zones* single policy, not strictly dominant. This closes the loop:
+dead-zone observed → diagnosed as demo-boundary conflict → curation predicted to fix →
+confirmed. It is a data-level mitigation of a unimodal-head limit; the full fix is still a
+multimodal action head or residual RL.

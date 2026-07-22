@@ -1220,3 +1220,16 @@ demos never contain RIM-CONTACT RECOVERY — precisely the skill a 2mm-off speci
 needs at the mouth. Next: LATE-CORRECTION demos (descend at the offset xy to ~5mm
 above the mouth, THEN correct laterally, then seat) = in-contact/near-contact
 correction content. m3c ADOPTED as current best (insert_m3c_wrench_k4.pt).
+
+## 2026-07-21 22:30 — RUN #4: m3d verdict — FIRST 2mm-offset SEAT (dose-response evidence)
+
+| m3d (77+19+9 late demos, pushin 8) | seats | totals |
+| --- | --- | --- |
+| lat1 | 2/3 | 92/93 + 1 'Task not completed' (no traceback; variance) |
+| lat2 | **1/3** | **93 seat** + 43/43 (50mm drift) — FIRST 2mm seat ever (all prior 0/x) |
+| lat3 | 0/3 | 43s |
+
+The 9 late-correction demos (descend at offset, correct at 5mm, seat) produced the
+first 2mm capture — weakly (1/3). Dose hypothesis: more late demos should lift it.
+m3e iteration launched: +12 late demos (6 @correct_at=5, 6 @correct_at=2 real rim
+drag) at 1.5-2.5mm → retrain → lat1/lat2 ×3. Time-boxed to ~01:30.

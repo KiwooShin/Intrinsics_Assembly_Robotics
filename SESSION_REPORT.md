@@ -1306,3 +1306,28 @@ neither at their boundary** — the textbook unimodal failure at a mode boundary
 by the plan-critique lens before the re-eval landed). The dose-response rows are unchanged
 (1 mm 3/3→2/3→1/3, 2 mm 0→1/3→2/3 across m3c/m3d/m3e); lat0 adds the third offset point
 that distinguishes "band splits / dead-zone" from "band slides." Showcase + progress updated.
+
+## 2026-07-22 01:30 — RUN #4 CONSOLIDATED SUMMARY TABLE (curriculum insertion)
+
+One row per experiment; staged official_2, n=3/cell, parse `total`+tier_3, seats score 92–94.
+
+| # | Experiment | Verdict | Key metric |
+| --- | --- | --- | --- |
+| M1 | Aligned insertion (curriculum, all-sensor) | ✅ **first learned seats** | 3/3 seats, engine 88 / 88 / 94 |
+| — | Wrench (F/T) ablation at aligned | ✅ force is load-bearing | with F/T seat 87 vs without partial 51 (stalls 50 mm) |
+| M2 | Lateral capture-radius sweep (m3c) | ✅ radius mapped | **[1, 2) mm** (1 mm 3/3; ≥2 mm drifts away) |
+| m3c | +0 late demos, `--pushin-weight 8` (champion) | ✅ repairs m3 dilution | 1 mm 3/3 @94 · 2 mm 0/3 |
+| m3d | +9 late-correction demos | ✅ **first 2 mm seat ever** | 1 mm 2/3 · 2 mm 1/3 @93 |
+| m3e | +18 late-correction demos | ◑ trade-off | 1 mm 1/3 · 2 mm **2/3** @92 · 0 mm **3/3** @92–94 |
+| — | Capture dose-response (m3c→m3d→m3e) | ★ **capture TRANSLATES / band SPLITS** | 1 mm 3/3→2/3→1/3 ; 2 mm 0→1/3→2/3 ; joint MC p≈0.007 |
+| — | Architecture audit (code) | ★ **deterministic L1 head, NOT CVAE** | `train_v3.py` `F.l1_loss`; no CVAE/latent/KL → conditional-median → mode-migration |
+| ops | scoring-write race | ✅ fixed | wait for `scoring.yaml` file, not the log marker |
+| ops | score-parse bug | ✅ fixed | parse `total`+tier_3 (not `grep -m1 'score:'` = tier_1's 1.0) |
+| ops | unified-RAM orphan leak | ✅ root-caused + fixed | 76 `aic_adapter` + 106 tf-pub orphans ate ~90 GB → OOM; widen kill patterns, nohup all trainings |
+
+**Bottom line.** The curriculum turned a retired blind-task seat into the project's first
+learned seats and a clean, literature-matching capture-radius science result. The single
+best model for reliable near-aligned insertion is **m3c** (1 mm 3/3 @94); **m3e** is a 2 mm
+specialist (2/3 @92) with a 1 mm dead-zone. Both live under `~/training/ckpt/`. The named,
+unimplemented fix for a single policy that holds both zones is a multimodal action head or
+residual RL on a frozen base — deferred as beyond a showcase's scope.

@@ -3,9 +3,29 @@ from __future__ import annotations
 
 import unittest
 
+import datetime
+
 from PIL import ImageFont
 
-from opt.make_milestone_gif import FONT_DIR, wrap_text
+from opt.make_milestone_gif import FONT_DIR, milestone_gif_path, wrap_text
+
+
+class MilestoneGifPathTest(unittest.TestCase):
+    def test_carries_number_date_and_hour(self) -> None:
+        when = datetime.datetime(2026, 7, 22, 8, 53, 0)
+        p = milestone_gif_path("docs/media", 1, "first_seat", when)
+        self.assertEqual(p, "docs/media/milestone1_first_seat_2026-07-22_08h.gif")
+
+    def test_spaces_become_underscores_and_trailing_slash_ok(self) -> None:
+        when = datetime.datetime(2026, 7, 22, 9, 0, 0)
+        p = milestone_gif_path("docs/media/", 2, "offset 2mm", when)
+        self.assertEqual(p, "docs/media/milestone2_offset_2mm_2026-07-22_09h.gif")
+
+    def test_rejects_bad_number_or_empty_slug(self) -> None:
+        with self.assertRaises(ValueError):
+            milestone_gif_path("d", 0, "x")
+        with self.assertRaises(ValueError):
+            milestone_gif_path("d", 1, "   ")
 
 
 class WrapTextTest(unittest.TestCase):

@@ -9,6 +9,8 @@ rendering needs only PIL (no ROS/GPU).
 """
 from __future__ import annotations
 
+import datetime
+
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
@@ -151,6 +153,35 @@ def build_milestone_gif(frames: list[Image.Image], out_path: str, *, eyebrow: st
     seq[0].save(out_path, save_all=True, append_images=seq[1:], duration=durs,
                 loop=0, optimize=True, disposal=2)
     return out_path
+
+
+def milestone_gif_path(dirpath: str, number: int, slug: str,
+                       when: datetime.datetime | None = None) -> str:
+    """Build the standard milestone-GIF path with milestone number, date, and hour.
+
+    Naming convention (user directive 2026-07-22): every milestone demo filename carries
+    the milestone NUMBER, the DATE, and the HOUR, e.g.
+    ``docs/media/milestone1_first_seat_2026-07-22_08h.gif``.
+
+    Args:
+        dirpath: Output directory (e.g. ``"docs/media"``).
+        number: Milestone number (1-based).
+        slug: Short kebab/snake description (spaces become ``_``).
+        when: Timestamp to stamp; defaults to now.
+
+    Returns:
+        The full path ``<dir>/milestone<N>_<slug>_<YYYY-MM-DD>_<HH>h.gif``.
+
+    Raises:
+        ValueError: If ``number < 1`` or ``slug`` is empty.
+    """
+    if number < 1:
+        raise ValueError(f"milestone number must be >= 1, got {number}")
+    slug = slug.strip().replace(" ", "_")
+    if not slug:
+        raise ValueError("slug must be non-empty")
+    when = when or datetime.datetime.now()
+    return f"{dirpath.rstrip('/')}/milestone{number}_{slug}_{when:%Y-%m-%d_%H}h.gif"
 
 
 def frames_from_gif(path: str) -> list[Image.Image]:

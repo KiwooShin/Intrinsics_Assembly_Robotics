@@ -9,13 +9,13 @@ The **RUN&nbsp;#4 curriculum** reopened the insertion problem: privileged-stage 
 
 ### Milestone 1 — First learned-policy seat
 
-![Milestone 1: first learned-policy seat](docs/media/milestone_first_seat.gif)
+![Milestone 1: first learned-policy seat](docs/media/milestone1_first_seat_2026-07-22_08h.gif)
 
 The project's first insertion by a **learned** policy — every prior seat came from the scripted oracle. Staged above an aligned port, the policy (3 RGB cameras + wrist force, **no ground-truth pose at run time**) descends and seats the SFP plug. Engine **93/100** (tier-3); **3/3** on the matched-seed suite.
 
 ### Milestone 2 — Off-center insertion (2&nbsp;mm)
 
-![Milestone 2: seating a 2mm-offset plug](docs/media/milestone_offset_2mm.gif)
+![Milestone 2: seating a 2mm-offset plug](docs/media/milestone2_offset_2mm_2026-07-22_09h.gif)
 
 Growing the staged lateral offset, the policy learns to correct at the mouth and seat a **2&nbsp;mm-offset** plug (engine **92.7**). This is the edge of the learned capture radius: ~50% reliable at 2&nbsp;mm, and beyond it the plug drifts past *before it can feel the port* — a **partial-observability** limit (the offset isn't visible until contact) dissected in the write-up, along with a contact-gated fix that was built, tested, and honestly shown to arrive too late.
 

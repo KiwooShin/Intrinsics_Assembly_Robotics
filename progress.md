@@ -13,6 +13,30 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-21 17:40 — RUN #4 cycle 5: m3c repairs regression (lat1 3/3@94); late-correction demos collected
+
+**GOAL:** learned all-sensor insertion via easy→hard curriculum. Standing results:
+M1 aligned **3/3 seats** (88s → 94s with the trimmed budget); M2 capture **[1,2) mm**;
+force ablation confirms the wrist-F/T head.
+
+**This cycle:** (1) A/B isolated the m3 corpus-dilution regression (m1 3/3 vs m3 1/3
+at lat=1); **m3c (`--pushin-weight 8`) repairs it — lat1 3/3 @ 94** — adopted best.
+(2) lat2 stayed 0/3 and the **mechanism** is now understood: the offset-staged oracle
+corrects *in free space* during descent, so the demos never contain rim-contact
+recovery. (3) Built + collecting **late-correction demos** (`CURR_CORRECT_AT_MM=5`:
+descend at the offset xy to 5 mm above the mouth, then correct, then seat) — EP 10/12,
+mostly seating. (4) Demo GIF pushed (oracle offset-correction seat).
+
+**What's missing:** capture ≥2 mm (m3d = m3c recipe + late demos, chained: retrain +
+lat1/2/3 eval, verdict ~19:15); SC transfer (harness needs the sc_entrance_waypoint
+staging axis); a learned-seat GIF; approach composition (13 mm handoff — far beyond
+current capture).
+
+**Next 4 h:** m3d verdict → branch: lat2 ≥2/3 → ladder lat3/4 + SC ext;
+else m3e (correct_at=2, real rim drag), time-boxed to ~04:00 — then freeze
+capture=[1,2) mm as the honest result and pivot to polish (showcase M1–M3 update,
+learned-seat GIF, final writeup). Commits this cycle: 0b49a72, e213189, b4d638a.
+
 ## 2026-07-21 13:40 — RUN #4 cycle 4: scoring-race root-caused (2 fixes); m1-vs-m3 A/B running
 
 **GOAL:** learned all-sensor insertion via easy→hard curriculum (M1 3/3 seats; M2

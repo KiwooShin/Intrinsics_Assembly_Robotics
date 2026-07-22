@@ -13,6 +13,57 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). **Newest (RUN #4 learn
 
 ---
 
+## 2026-07-22 05:40 — RUN #4 cycle 8: m3f closes the loop; the real bottleneck is PARTIAL OBSERVABILITY (not the head)
+
+**GOAL:** learned all-sensor curriculum insertion, as a *showcase*. This window took the
+result from "dead-zone + freeze" to a complete, closed research loop plus the deepest
+(and correct) statement of the limit — and ruled out a tempting wrong fix by measurement.
+
+**Avg score (this window; staged official_2, n as noted; no NEW policy trained except
+m3f).** The one new experiment, m3f (curate late-correction demos to ≥2 mm, dropping the
+5 conflicting 1.5 mm ones):
+
+| ckpt | 1 mm | 2 mm | note |
+| --- | --- | --- | --- |
+| m3c (champion) | 3/3 @94 | 0/3 | reliable near-aligned |
+| m3f | **4/6** | **3/6** (n=6) | best-*balanced*; adopt bar (both ≥2/3) not met at n=6 |
+
+m3f recovered the 1 mm zone (m3e 1/3 → 4/6) confirming the dead-zone diagnosis (the
+1.5 mm demos bled "search" into the 1 mm regime), but 2 mm settled to a coin-flip — the
+n=3 "2/3" was partly luck. m3c stays champion; m3f is the best single all-round policy.
+
+**Multi-perspective analysis this cycle (CLAUDE.md §4).** A Plan sub-agent scoped the
+"clean fix" (a CVAE/multimodal head) *and* assessed it adversarially; an offline
+action-probe (`opt/action_probe.py`, no sim/train) tested its premise. Both converge:
+- CVAE odds ~15 % task-win / ~70 % mere mode-demo — at deploy the latent z must come from
+  an **unconditioned prior** (no posterior without the ground-truth action), so it *guesses*
+  the mode; no head can add an unobservable.
+- Action-probe: m3c/m3e/m3f all command **near-pure vertical descent at the ~20 mm standoff
+  regardless of offset** (lateral < 0.5 mm/s vs ~30 mm/s vertical) — the offset is simply
+  not in the observation there.
+
+**What's missing (the honest gap):** a single policy that *reliably* holds BOTH the 1 mm
+and 2 mm zones. This is **blocked by partial observability, not by the action head** — the
+only signal that disambiguates "descend straight" from "search out" is the **contact
+wrench**, which arrives at the mouth. So a fancier feedforward head (CVAE/diffusion) cannot
+fix it; the principled fix is a **contact-gated closed loop** that reacts to the wrench
+spike within the K=4 re-inference loop. (Also open, from run #3: the *blind* full-task
+approach is camera-resolution-capped ~22.7 mm; SC-port transfer.)
+
+**Next 4 h:** consolidation/maintenance — the showcase is complete and is the safe
+baseline. Decided **not** to implement the CVAE (it would confirm a well-supported
+negative and risk muddying a clean, sophisticated result); instead articulated the
+observability conclusion across showcase + report + memory. Contact-gated reactivity is
+the only remaining big thrust (repo has `guarded_descent.py` StallDetector + AIC_SPECIALIST;
+the novel bit is within-chunk wrench reactivity) — undertaken **only if clearly worth it**,
+incrementally + unit-tested + time-boxed. Otherwise maintain the heartbeat/watchdog to STOP.
+
+**Ops this window:** root-caused + fixed a *recurring* RAM leak — 312 leaked ROS launch
+children (`robot_state_publisher` + `topic_tools/relay`, ~90 GB) that `cleanup_sim` never
+matched; purged (→117 GB free), widened the kill net + added a self-kill guard. Commits
+this cycle: 07dde68 · ddcc7cb · ac4f849 · 819bba8 · 84b5cde · 878fa60 · 58eb5e9 · 51139b2 ·
+170f952 · 3ff909d · e46750f (m3e/m3f/showcase/GIF/leak-fix/probe/observability).
+
 ## 2026-07-22 01:40 — RUN #4 cycle 7: m3e verdict — capture TRANSLATES (not expands); architecture corrected; freeze-and-polish decided
 
 **GOAL:** learned all-sensor insertion via easy→hard curriculum, as a *showcase*

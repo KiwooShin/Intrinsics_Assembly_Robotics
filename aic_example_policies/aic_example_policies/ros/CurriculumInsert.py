@@ -37,6 +37,15 @@ import os
 
 import numpy as np
 
+# cheatcode_targeting is pure (numpy only), so these SC-geometry helpers import at
+# module top -- the pose-conditioned SC staging axis is needed by the pure helper
+# ``sc_axis_frame`` below (unit-tested without ROS). Mirrors DisassembleCode.
+from aic_example_policies.ros.cheatcode_targeting import (
+    SC_APPROACH_STANDOFF_M,
+    SC_PORT_TYPE,
+    sc_entrance_waypoint,
+)
+
 # Torch and the model mirror import lazily inside _load_specialist so the pure
 # helpers stay importable in ROS/torch-free unit tests.
 
@@ -67,6 +76,77 @@ def lateral_offset_vector(offset_mm: float, azimuth_deg: float) -> np.ndarray:
     r = offset_mm * 1e-3
     a = np.deg2rad(azimuth_deg)
     return np.array([r * np.cos(a), r * np.sin(a)], dtype=np.float64)
+
+
+def _lateral_basis(axis: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return two orthonormal vectors spanning the plane orthogonal to ``axis``.
+
+    A right-handed ``(u, v)`` basis (both unit, mutually orthogonal, and orthogonal
+    to the unit ``axis``) -- the port-face plane a commanded curriculum lateral
+    offset is mapped into for a rotated SC port. Mirrors
+    ``DisassembleCode._lateral_basis`` / ``guarded_descent._lateral_basis`` (kept
+    local so the pure helpers stay ROS-free and unit-testable).
+
+    Args:
+        axis: Unit axis ``(3,)`` (the SC insertion axis).
+
+    Returns:
+        The ``(u, v)`` pair of ``(3,)`` unit vectors orthogonal to ``axis``.
+    """
+    a = np.asarray(axis, dtype=np.float64).reshape(3)
+    ref = (
+        np.array([1.0, 0.0, 0.0])
+        if abs(float(a[0])) < 0.9
+        else np.array([0.0, 1.0, 0.0])
+    )
+    u = ref - a * float(np.dot(ref, a))
+    u = u / float(np.linalg.norm(u))
+    v = np.cross(a, u)
+    v = v / float(np.linalg.norm(v))
+    return u, v
+
+
+def sc_axis_frame(
+    entrance_pos: np.ndarray, entrance_quat: np.ndarray, standoff_m: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return the pose-conditioned SC staging frame for the curriculum insert.
+
+    Mirrors the proven ``CheatCode`` / ``DisassembleCode`` SC geometry: the SC
+    entrance frame's local +z points *into* the port, so
+    :func:`sc_entrance_waypoint` rotates it into the base frame to get the unit
+    insertion axis, and the pre-insertion hover sits ``standoff_m`` back out of the
+    mouth along that axis (``entrance_pos - standoff_m * insertion_axis``). A
+    right-handed lateral basis ``(u, v)`` spans the plane orthogonal to the axis so
+    a commanded lateral offset can be mapped off the world xy-plane onto the true
+    (rotated) port face. Pure (pose in -> frame out): unit-tests without ROS.
+
+    When the resolved axis is world-vertical (canonical mount / identity-ish pose)
+    the hover displacement is a pure world-z step and the lateral basis is world
+    ``(x, y)``, so the geometry reduces to the legacy world-z staging line.
+
+    Args:
+        entrance_pos: SC entrance-frame origin ``[x, y, z]`` in base_link (m).
+        entrance_quat: SC entrance-frame orientation ``[x, y, z, w]`` in base_link
+            (renormalized inside :func:`sc_entrance_waypoint`).
+        standoff_m: Pre-insertion standoff distance (m) along the port axis; must be
+            finite and >= 0.
+
+    Returns:
+        A tuple ``(hover_point, insertion_axis, u_lat, v_lat)`` of base-frame
+        ``(3,)`` float64 arrays: the on-axis pre-insertion hover point, the unit
+        insertion axis (pointing into the port), and the two unit lateral-basis
+        vectors (mutually orthogonal, both orthogonal to the axis).
+
+    Raises:
+        ValueError: Propagated from :func:`sc_entrance_waypoint` for a bad pose or
+            standoff (non-length-3 / non-finite position, near-zero-norm quaternion,
+            or negative / non-finite standoff).
+    """
+    wp = sc_entrance_waypoint(entrance_pos, entrance_quat, standoff_m)
+    insertion_axis = np.asarray(wp.insertion_axis, dtype=np.float64).reshape(3)
+    u_lat, v_lat = _lateral_basis(insertion_axis)
+    hover_point = np.asarray(wp.approach_point, dtype=np.float64).reshape(3)
+    return hover_point, insertion_axis, u_lat, v_lat
 
 
 def wrench_force_mag(force_xyz: object) -> float:
@@ -343,13 +423,64 @@ try:  # pragma: no cover - exercised only inside the aic_model runtime.
                 return False
 
             dxy = lateral_offset_vector(lat_mm, lat_az)
-            hover = np.array(
-                [
-                    port_tf.translation.x + dxy[0],
-                    port_tf.translation.y + dxy[1],
-                    port_tf.translation.z + standoff,
-                ]
-            )
+            # Resolve the insertion frame. SFP keeps the legacy world-z path: the
+            # hover is the port xy (+ lateral offset) at ``standoff`` above the mouth
+            # and the descent is straight down. SC is pose-conditioned: its entrance
+            # link is physically rotated, so staging/descent follow the true insertion
+            # axis (into the port) resolved from the privileged entrance pose --
+            # mirrors the proven CheatCode/DisassembleCode SC branch. ``stage_standoff``
+            # is the high-approach height (SC pinned to the proven
+            # SC_APPROACH_STANDOFF_M; both 0.2 m so the SFP path stays byte-identical).
+            is_sc = task.port_type.strip().lower() == SC_PORT_TYPE
+            stage_standoff = SC_APPROACH_STANDOFF_M if is_sc else _STAGE_STANDOFF_M
+            if is_sc:
+                entrance_pos = np.array(
+                    [
+                        port_tf.translation.x,
+                        port_tf.translation.y,
+                        port_tf.translation.z,
+                    ]
+                )
+                entrance_quat = np.array(
+                    [
+                        port_tf.rotation.x,
+                        port_tf.rotation.y,
+                        port_tf.rotation.z,
+                        port_tf.rotation.w,
+                    ]
+                )
+                sc_hover, insertion_axis, u_lat, v_lat = sc_axis_frame(
+                    entrance_pos, entrance_quat, standoff
+                )
+                # Map the world-parameterized curriculum offset onto the port face
+                # (the plane orthogonal to the insertion axis). Reduces to the world
+                # xy offset when the axis is world-vertical (u_lat=+x, v_lat=+y).
+                lat_vec = dxy[0] * u_lat + dxy[1] * v_lat
+                hover = sc_hover + lat_vec
+
+                def _sc_axis_point(z_off: float, lat_frac: float = 1.0) -> np.ndarray:
+                    """Plug-tip target ``z_off`` m outside the entrance along the axis.
+
+                    ``entrance_pos - z_off * insertion_axis`` places the tip ``z_off``
+                    m outside the mouth and steps it into the port as ``z_off``
+                    decreases through 0 (mirrors CheatCode ``sc_target``); ``lat_frac``
+                    scales the curriculum lateral offset (1 = staged offset, 0 =
+                    on-axis / centered).
+                    """
+                    return entrance_pos - z_off * insertion_axis + lat_frac * lat_vec
+
+                self.get_logger().info(
+                    f"CurriculumInsert(SC): insertion_axis={insertion_axis} "
+                    f"hover={hover} lat_vec={lat_vec}"
+                )
+            else:
+                hover = np.array(
+                    [
+                        port_tf.translation.x + dxy[0],
+                        port_tf.translation.y + dxy[1],
+                        port_tf.translation.z + standoff,
+                    ]
+                )
 
             # --- Phase 1: privileged staging. High interpolated approach, then a
             # gradual free-space descent to the handoff hover point. ---
@@ -362,18 +493,28 @@ try:  # pragma: no cover - exercised only inside the aic_model runtime.
                             port_tf,
                             slerp_fraction=frac,
                             position_fraction=frac,
-                            z_offset=_STAGE_STANDOFF_M,
+                            z_offset=stage_standoff,
                             reset_xy_integrator=True,
+                            target_position_base=(
+                                _sc_axis_point(stage_standoff, 0.0) if is_sc else None
+                            ),
                         ),
                     )
                 except TransformException as ex:
                     self.get_logger().warn(f"staging TF failure: {ex}")
                 self.sleep_for(_DESCENT_DT_S)
 
-            z = _STAGE_STANDOFF_M
+            z = stage_standoff
             while z > standoff:
-                z = max(standoff, z - _DESCENT_STEP_M)
-                tgt = np.array([hover[0], hover[1], port_tf.translation.z + z])
+                # SC needs a slow, continuous descent (CheatCode's ~10mm/s) so the
+                # impedance controller converges precisely onto the tilted insertion
+                # axis before the seat; the fast SFP step (40mm/s) leaves it ~3.5mm
+                # off and it rams the rotated port. SFP step unchanged.
+                z = max(standoff, z - (0.0005 if is_sc else _DESCENT_STEP_M))
+                if is_sc:
+                    tgt = _sc_axis_point(z, 1.0)
+                else:
+                    tgt = np.array([hover[0], hover[1], port_tf.translation.z + z])
                 try:
                     self.set_pose_target(
                         move_robot=move_robot,
@@ -409,7 +550,15 @@ try:  # pragma: no cover - exercised only inside the aic_model runtime.
                 floor_z = approach.descent_floor_z
 
                 def _tip(zh: float, frac: float) -> np.ndarray:
-                    """Plug-tip target at height ``zh``, offset scaled by ``frac``."""
+                    """Plug-tip target at standoff-eq height ``zh``, offset by ``frac``.
+
+                    SFP: world-z (port xy + ``frac``-scaled lateral, port.z + ``zh``).
+                    SC: ``zh`` m outside the entrance along the insertion axis with the
+                    curriculum lateral offset scaled by ``frac`` (``frac`` -> 0 puts the
+                    tip on the axis / centered).
+                    """
+                    if is_sc:
+                        return _sc_axis_point(zh, frac)
                     return np.array([
                         port_tf.translation.x + dxy[0] * frac,
                         port_tf.translation.y + dxy[1] * frac,
@@ -444,7 +593,13 @@ try:  # pragma: no cover - exercised only inside the aic_model runtime.
                     try:
                         self.set_pose_target(
                             move_robot=move_robot,
-                            pose=self.calc_gripper_pose(port_tf, z_offset=z),
+                            pose=(
+                                self.calc_gripper_pose(
+                                    port_tf, target_position_base=_sc_axis_point(z, 0.0)
+                                )
+                                if is_sc
+                                else self.calc_gripper_pose(port_tf, z_offset=z)
+                            ),
                         )
                     except TransformException as ex:
                         self.get_logger().warn(f"oracle descent TF failure: {ex}")
@@ -466,6 +621,24 @@ try:  # pragma: no cover - exercised only inside the aic_model runtime.
             dt_fine = DT_FRAME / SUBSTEPS
             virt = hover.copy()
             floor_z = port_tf.translation.z - 0.020  # hard floor: 20mm below mouth
+            # SC hard floor: never penetrate deeper than 20mm PAST the entrance ALONG
+            # the insertion axis (the world-z floor above is meaningless for a rotated
+            # port). Mirrors the SFP 20mm-below-mouth safety floor, measured along the
+            # true axis; lateral (port-face) motion stays unconstrained. JUDGMENT CALL
+            # -- see report; validate in-sim.
+            sc_max_depth = 0.020
+
+            def _sc_floor(p: np.ndarray) -> np.ndarray:
+                """Clamp axial penetration to ``sc_max_depth`` along the insertion axis.
+
+                Projects only the excess axial component back out along the axis, so
+                the lateral (port-face) components of ``p`` are preserved (the SC
+                analogue of the SFP ``point[2] = max(point[2], floor_z)`` clamp).
+                """
+                depth = float(np.dot(p - entrance_pos, insertion_axis))
+                if depth > sc_max_depth:
+                    return p - (depth - sc_max_depth) * insertion_axis
+                return p
             # Contact-gated early re-inference (CURR_REACT_WRENCH_N > 0 enables it):
             # if |F| DEVIATES from the per-chunk baseline by more than this many newtons
             # mid-chunk (rig contact shows as a ~13 N drop, not a spike — see
@@ -488,7 +661,10 @@ try:  # pragma: no cover - exercised only inside the aic_model runtime.
                     step = chunk[k, :3] * DT_FRAME
                     for s in range(1, SUBSTEPS + 1):
                         point = virt + step * (s / SUBSTEPS)
-                        point[2] = max(point[2], floor_z)
+                        if is_sc:
+                            point = _sc_floor(point)
+                        else:
+                            point[2] = max(point[2], floor_z)
                         try:
                             self.set_pose_target(
                                 move_robot=move_robot,
@@ -501,7 +677,10 @@ try:  # pragma: no cover - exercised only inside the aic_model runtime.
                             self.get_logger().warn(f"phase-2 TF failure: {ex}")
                         self.sleep_for(dt_fine)
                     virt = virt + step
-                    virt[2] = max(virt[2], floor_z)
+                    if is_sc:
+                        virt = _sc_floor(virt)
+                    else:
+                        virt[2] = max(virt[2], floor_z)
                     if react_n > 0.0:
                         ob = get_observation()
                         if ob is not None:

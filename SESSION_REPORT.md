@@ -1434,3 +1434,35 @@ sample an unconditioned mode at deploy). Decision: **do NOT implement the CVAE**
 a negative already well-supported and risk muddying a clean, sophisticated result. m3c stays
 champion; the showcase's closing analysis is upgraded to this observability framing. The action
 probe (`opt/action_probe.py`, `results/action_probe.json`) is committed as reproducible evidence.
+
+## 2026-07-22 06:38 — RUN #4: the contact-gate WORKS — 2 mm lifts 3/6 → 5/6 (fix validated)
+
+Having concluded the fix should be a contact-gated closed loop (not a fancier head), I built and
+tested it rather than only asserting it. `CURR_REACT_WRENCH_N` (CurriculumInsert phase-2, env-gated,
+default off = baseline byte-identical): during a chunk, if |F| deviates from the free-space baseline
+by more than N newtons, break and re-infer with the contact observation, so the policy reacts to rim
+contact faster than the ~1.1 s chunk cadence. **Key implementation finding:** this rig's wrist F/T is
+bias-dominated — |F| ≈ 20 N in free-space descent (plug weight/bias) and *drops* to ~7–8 N at contact
+(the port supports the plug), so contact is a ~13 N **drop**, not a spike; the detector is a
+deviation-from-baseline (`contact_spike`), not an absolute threshold (which would fire backwards).
+15/15 unit tests; deploy path symlinked to the repo (live).
+
+**Result — m3f @ 2 mm, gate on (REACT_N=6), staged official_2:**
+
+| n | gate-off (baseline) | gate-on | note |
+| --- | --- | --- | --- |
+| 3 | — | 2/3 | both seats had the gate fire |
+| **6** | **3/6** | **5/6** @92.6–92.8 | the fix lifts 2 mm |
+
+**Causal pattern (the load-bearing evidence, beyond the raw count):** across the 6 gate-on trials,
+**every one of the 5 seats had the gate fire (contact reached → re-plan → seat); the single miss
+(r3, drift 50 mm) never fired the gate — it drifted past the port pre-contact.** So the gate helps
+exactly when contact is made, and the residual failure is a *pre-contact drift* in the offset-blind
+approach — precisely the partial-observability limit. This both **validates the prescribed fix**
+(contact-gating lifts the reachable cases) and **confirms the bottleneck** (the unreachable cases
+never contact). Ops: 0 orphan leak across the eval (widened `cleanup_sim` holds); 117 GB free.
+
+Regression check running (m3f gate-on @1 mm n=6 + @0 mm n=3): if the inner zones hold, contact-gated
+m3f is the first single config to seat reliably across 0/1/2 mm — adopt decision + showcase update to
+follow. n=6 vs n=6 (5/6 vs 3/6) is promising but not yet significant in isolation; the perfect
+gate-fire⟺seat pattern is the stronger signal.

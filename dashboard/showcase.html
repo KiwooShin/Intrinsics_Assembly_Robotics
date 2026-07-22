@@ -300,7 +300,7 @@
 
   <div class="prose">
   <p><b>Testing the diagnosis.</b> The mechanism makes a falsifiable prediction: remove the conflicting ~1.5&nbsp;mm demos (curate the corrective set to ≥2&nbsp;mm) and the 1&nbsp;mm zone should recover. Retrained that way (<code>m3f</code>), it does — 1&nbsp;mm climbs back to a majority (<b>4/6</b>) while 2&nbsp;mm stays above m3c's zero (<b>3/6</b>, n=6). The prediction holds — which confirms the mechanism — but a single median still cannot make both zones reliable at once: rebalancing buys a better <em>blend</em>, not two modes. That residual gap is the unimodal limit itself, and the clean fix stays a genuinely multimodal head or a residual-RL correction on the frozen base.</p>
-  <p>The pragmatic engineering conclusion is a <b>mixture of specialists</b>: keep <code>m3c</code> as the reliable near-aligned seater (3/3 @ 94) and treat <code>m3e</code> as a 2&nbsp;mm specialist (2/3 @ 92), routed by the early-descent contact signal — you discover the trade-off, then engineer around it rather than pretending one median can be in two places at once.</p>
+  <p>The pragmatic alternative — short of retraining with a multimodal head — is a <b>mixture of specialists</b>: route between <code>m3c</code> (reliable near-aligned, 3/3 @ 94) and <code>m3e</code> (2&nbsp;mm, 2/3 @ 92) on the early-descent contact signal. That is a design direction the finding motivates rather than a result claimed here; the point is that a precisely characterized trade-off can be engineered around, instead of asking one median to be in two places at once.</p>
   </div>
 
   <!-- ============================== ENGINEERING ============================== -->

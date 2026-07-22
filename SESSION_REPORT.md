@@ -1462,7 +1462,28 @@ approach — precisely the partial-observability limit. This both **validates th
 (contact-gating lifts the reachable cases) and **confirms the bottleneck** (the unreachable cases
 never contact). Ops: 0 orphan leak across the eval (widened `cleanup_sim` holds); 117 GB free.
 
-Regression check running (m3f gate-on @1 mm n=6 + @0 mm n=3): if the inner zones hold, contact-gated
-m3f is the first single config to seat reliably across 0/1/2 mm — adopt decision + showcase update to
-follow. n=6 vs n=6 (5/6 vs 3/6) is promising but not yet significant in isolation; the perfect
-gate-fire⟺seat pattern is the stronger signal.
+**Regression check (does the gate hurt the inner zones?) — it does not.** m3f gate-on:
+
+| offset | gate-on seats | gate fired? | gate-off baseline |
+| --- | --- | --- | --- |
+| 0 mm | 2/3 @93.4 | 0× (never) | m3c/m3e 3/3 |
+| 1 mm | **6/6** @92.8–93.1 | 0× in 5/6 trials | 4/6 |
+| 2 mm | **5/6** @92.6–92.8 | fired in all 5 seats | 3/6 |
+
+The gate **only engages at 2 mm** — at 0/1 mm the descent contacts cleanly and |F| stays within the
+deviation threshold, so those trials run identical to baseline (gate fired 0×) and there is **no
+regression** (1 mm 6/6, 0 mm 2/3 — the single 0 mm miss is m3f's own aligned variance, a pre-contact
+drift, not a gate effect). So the complete **contact-gated m3f** profile is **0 mm 2/3 · 1 mm 6/6 ·
+2 mm 5/6** — the **first single configuration to clear both the 1 mm and 2 mm zones** (6/6 and 5/6,
+both well above the 2/3 bar that m3c (2 mm 0/3) and m3e (1 mm 1/3) never met simultaneously).
+
+**Verdict — the observability-prescribed fix works, closing the arc.** Dead-zone → diagnosed as a
+unimodal-median artifact → deeper diagnosis (partial observability: the disambiguating signal is the
+contact wrench) → **built the contact-gate → it lifts 2 mm to 5/6 and holds 1 mm at 6/6**, exactly by
+the predicted mechanism (react to rim contact, re-plan, apply the learned correction before drifting).
+Adopt: **contact-gated m3f (`insert_m3f_wrench_k4.pt` + `CURR_REACT_WRENCH_N=6`) is the best
+offset-robust single policy**; m3c stays marginally more reliable at *exact* center (3/3 vs 2/3), so it
+remains the pure-aligned champion. Honest caveats: n=6/cell, not seed-matched, so the 5/6-vs-3/6 count
+alone is not significant — the load-bearing evidence is the within-condition gate-fire⟺seat determinism
+(5/5 fired-seats at 2 mm) plus the clean no-regression inner zones. Residual limit unchanged: the only
+failures are pre-contact drifts (offset-blind approach), which no post-contact signal can rescue.

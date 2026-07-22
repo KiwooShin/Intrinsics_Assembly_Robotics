@@ -1,21 +1,40 @@
 # Camera-Only Imitation Learning for Robotic Cable Insertion
 
-**A learned visuomotor policy that inserts SFP/SC fiber-optic plugs into NIC ports with a UR5e — from RGB cameras only, no ground-truth poses, no depth.**
+**A learned visuomotor policy that inserts SFP/SC fiber-optic plugs into NIC ports with a UR5e — localizing from RGB cameras only (no ground-truth poses, no depth) and seating with wrist force.**
 Built on the [Intrinsic AI for Industry Challenge](https://www.intrinsic.ai/events/ai-for-industry-challenge) toolkit (Gazebo simulation, real contact physics, force-aware scoring). This fork adds the full research pipeline: oracle distillation, ACT-style policy learning, a hardened evaluation harness, and a statistics-first experiment log.
 
-## Demos
+## Milestones
+
+The **RUN&nbsp;#4 curriculum** reopened the insertion problem: privileged-stage the plug above the port, learn the *seating* skill from vision + force, then grow the lateral offset stage by stage. That produced the project's first learned-policy seats — and a systematic study of exactly how far off-center they generalize, and why. The full interactive write-up (dose-response, code-verified mechanism, and the partial-observability analysis) is [`dashboard/showcase.html`](dashboard/showcase.html) *(open in a browser)*; the running lab notebook is [`SESSION_REPORT.md`](SESSION_REPORT.md).
+
+### Milestone 1 — First learned-policy seat
+
+![Milestone 1: first learned-policy seat](docs/media/milestone_first_seat.gif)
+
+The project's first insertion by a **learned** policy — every prior seat came from the scripted oracle. Staged above an aligned port, the policy (3 RGB cameras + wrist force, **no ground-truth pose at run time**) descends and seats the SFP plug. Engine **93/100** (tier-3); **3/3** on the matched-seed suite.
+
+### Milestone 2 — Off-center insertion (2&nbsp;mm)
+
+![Milestone 2: seating a 2mm-offset plug](docs/media/milestone_offset_2mm.gif)
+
+Growing the staged lateral offset, the policy learns to correct at the mouth and seat a **2&nbsp;mm-offset** plug (engine **92.7**). This is the edge of the learned capture radius: ~50% reliable at 2&nbsp;mm, and beyond it the plug drifts past *before it can feel the port* — a **partial-observability** limit (the offset isn't visible until contact) dissected in the write-up, along with a contact-gated fix that was built, tested, and honestly shown to arrive too late.
+
+<details>
+<summary><b>Earlier runs</b> — camera-only approach, pre-curriculum</summary>
 
 | Scripted oracle — a full SFP insertion (the task) | Learned policy — camera-only rollout |
 |:---:|:---:|
 | ![Oracle demo: complete SFP insertion](docs/media/oracle_demo_sfp_rail0_sfp_port_0.gif) | ![Learned policy rollout on official_1](docs/media/policy_p1_k16_official_1.gif) |
-| `CheatCode` oracle (reads ground-truth port poses) seats the plug — engine score ≈93/100. This is the teacher and the per-trial upper bound. | ACT policy (3 RGB cams + TCP state, ~0.75 M params) drives a clean approach on an official evaluation config. 2.5× speed, three-camera view. |
+| `CheatCode` oracle (reads ground-truth port poses) seats the plug — engine ≈93/100. The teacher and per-trial upper bound. | ACT policy (3 RGB cams + TCP state, ~0.75 M params) drives a clean approach on an official config. 2.5× speed, three-camera view. |
 
 | Adopted checkpoint `v2_wide` on official_2 — engine 41.6 |
 |:---:|
 | ![Adopted checkpoint v2_wide on official_2](docs/media/policy_v2_wide_official_2.gif) |
-| The adopted checkpoint's characteristic behavior on a harder pose: a clean camera-only approach that stalls ~5–8 cm from the port — the **last-inch attractor** analyzed below. Shown deliberately: this is the current frontier the research plan attacks. |
+| Characteristic pre-curriculum behavior on a harder pose: a clean camera-only approach that stalls ~5–8&nbsp;cm from the port (the **last-inch attractor**). The curriculum milestones above are how the seat was finally reached. |
 
-*GIFs are 2.5× timelapses of the full episodes.*
+</details>
+
+*Milestone GIFs: a title card, then the 3-camera rollout (left / center / right) with the measured result. Earlier-run GIFs are 2.5× timelapses.*
 
 ## Results
 

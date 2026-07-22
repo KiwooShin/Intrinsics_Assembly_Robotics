@@ -184,6 +184,56 @@ def milestone_gif_path(dirpath: str, number: int, slug: str,
     return f"{dirpath.rstrip('/')}/milestone{number}_{slug}_{when:%Y-%m-%d_%H}h.gif"
 
 
+def _tally_card(w: int, h: int, eyebrow: str, big: str, lines: list[str]) -> Image.Image:
+    card = Image.new("RGB", (w, h), BG)
+    d = ImageDraw.Draw(card)
+    d.rectangle([0, h - 5, w, h], fill=SEAT)
+    d.text((PAD + 6, h * 0.20), eyebrow.upper(), font=_font("DejaVuSansMono-Bold.ttf", 13), fill=SEAT)
+    d.text((PAD + 6, h * 0.20 + 24), big, font=_font("DejaVuSans-Bold.ttf", 40), fill=INK)
+    ty = h * 0.20 + 74
+    for line in lines:
+        for wrapped in wrap_text(line, _font("DejaVuSans.ttf", 14), w - 2 * (PAD + 6)):
+            d.text((PAD + 6, ty), wrapped, font=_font("DejaVuSans.ttf", 14), fill=MUTED)
+            ty += 20
+    return card
+
+
+def build_montage_gif(clips: list[dict], out_path: str, *, eyebrow: str, title: str,
+                      subtitle: str, tally_big: str, tally_lines: list[str],
+                      duration_ms: int = 75) -> str:
+    """Compose several labeled rollout clips + a tally card into one montage GIF.
+
+    Each clip is ``{"frames": [PIL RGB...], "title": str, "caption": str,
+    "badge": str, "badge_color": tuple}`` and is annotated with the shared ``eyebrow``
+    plus its own per-clip title/caption/badge, then concatenated. A title card leads and
+    a tally card closes. Used for the "N random locations" robustness demo.
+
+    Raises:
+        ValueError: If ``clips`` is empty or a clip has no frames.
+    """
+    if not clips:
+        raise ValueError("clips must be non-empty")
+    seq: list[Image.Image] = []
+    w = h = None
+    for c in clips:
+        if not c.get("frames"):
+            raise ValueError("each clip needs non-empty frames")
+        for f in c["frames"]:
+            a = _annotate(f.convert("RGB"), eyebrow, c["title"], c["caption"],
+                          c.get("badge", ""), c.get("badge_color", SEAT))
+            if w is None:
+                w, h = a.size
+            seq.append(a)
+    card = _title_card(w, h, eyebrow, title, subtitle)
+    tally = _tally_card(w, h, eyebrow, tally_big, tally_lines)
+    full = [card] * 14 + seq + [tally] * 22
+    durs = [110] * 14 + [duration_ms] * len(seq) + [200] * 22
+    full = [im.quantize(colors=128, method=Image.FASTOCTREE, dither=Image.Dither.NONE) for im in full]
+    full[0].save(out_path, save_all=True, append_images=full[1:], duration=durs,
+                 loop=0, optimize=True, disposal=2)
+    return out_path
+
+
 def frames_from_gif(path: str) -> list[Image.Image]:
     """Load all frames of an existing GIF as RGB images."""
     im = Image.open(path)

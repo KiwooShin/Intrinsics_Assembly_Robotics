@@ -19,6 +19,12 @@ The project's first insertion by a **learned** policy — every prior seat came 
 
 Growing the staged lateral offset, the policy learns to correct at the mouth and seat a **2&nbsp;mm-offset** plug (engine **92.7**). This is the edge of the learned capture radius: ~50% reliable at 2&nbsp;mm, and beyond it the plug drifts past *before it can feel the port* — a **partial-observability** limit (the offset isn't visible until contact) dissected in the write-up, along with a contact-gated fix that was built, tested, and honestly shown to arrive too late.
 
+### Milestone 3 — Robustness across 10 random locations
+
+![Milestone 3: 10 random locations](docs/media/milestone3_ten_random_locations_2026-07-22_14h.gif)
+
+The **same seating policy on 10 fully-randomized scenes** — different board poses, NIC rails, and ports — seats **9/10 at ~93/100**, up from **7/10** before robustifying on a wider, pose-diverse corpus (`m4` vs `m3c`). The lone miss is a rare execution-failure/runaway (~10% across the distribution), disclosed in the tally rather than cropped out. Privileged-staged curriculum (a training-legal capability study; the *blind* full task is camera-resolution-limited — see the write-up).
+
 <details>
 <summary><b>Earlier runs</b> — camera-only approach, pre-curriculum</summary>
 

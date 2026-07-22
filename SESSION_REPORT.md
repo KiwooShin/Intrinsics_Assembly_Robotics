@@ -1233,3 +1233,38 @@ The 9 late-correction demos (descend at offset, correct at 5mm, seat) produced t
 first 2mm capture — weakly (1/3). Dose hypothesis: more late demos should lift it.
 m3e iteration launched: +12 late demos (6 @correct_at=5, 6 @correct_at=2 real rim
 drag) at 1.5-2.5mm → retrain → lat1/lat2 ×3. Time-boxed to ~01:30.
+
+## 2026-07-22 00:44 — RUN #4: m3e verdict — 2mm reaches MAJORITY, but capture TRANSLATED (1mm regresses)
+
+| m3e (77+19+9+9 late demos, pushin 8) | seats | totals | vs prior |
+| --- | --- | --- | --- |
+| lat1 (1mm) | **1/3** | 92 seat + "not completed"(1) + "exec failed"(0) | ↓ from m3c 3/3, m3d 2/3 |
+| lat2 (2mm) | **2/3** | 92 / 92 seats + "exec failed"(0) | ↑ from m3d 1/3, m3c 0/3 — first 2mm MAJORITY |
+
+Full dose–response across the three corpus versions (late-correction demos added
+monotonically: 0 → 9 → 18):
+
+| corpus | 1mm seats | 2mm seats |
+| --- | --- | --- |
+| m3c (base, 0 late) | 3/3 | 0/3 |
+| m3d (+9 late) | 2/3 | 1/3 |
+| m3e (+18 late) | 1/3 | 2/3 |
+
+**Finding — capture TRANSLATES outward, it does not EXPAND.** As late-correction
+(offset-recovery) demos are added, 2mm success climbs 0→1/3→2/3 while 1mm erodes
+3/3→2/3→1/3. The operating point is being shifted outward (~1.5mm center now), not
+widened. Mechanistically the late demos teach a "search/translate-outward-on-descent"
+behaviour that the policy applies *even when it starts near-aligned*, over-shooting a
+1mm target — a mode-migration / mild catastrophic-forgetting signature well known in
+demo-imbalanced imitation learning. The two 1mm failures are the drift-signature
+("execution failed" after the arm searches into a bad state; r2 ran ~1100s), not
+pure infra flake, so the regression reads as real.
+
+**Decision (pre-registered rule: adopt m3e only if BOTH lat1 & lat2 ≥2/3 — NOT met).**
+m3c stays the adopted champion for the reliable-aligned/1mm regime (3/3@94); m3e is a
+distinct **2mm specialist** (2/3). The honest headline is unchanged in spirit: a single
+pure-vertical-trained policy captures [1,2)mm; late-correction demos push the frontier
+to 2mm but at the cost of the inner zone unless the mixture is rebalanced. Next test is
+whether a *balanced* corpus (aligned + late-correction, or contact-gated search) can
+hold BOTH zones ≥2/3 — the m3f hypothesis. Multi-agent cycle analysis + a lat0 (aligned)
+re-eval of m3e launched to (a) confirm the translation mechanism and (b) design m3f.

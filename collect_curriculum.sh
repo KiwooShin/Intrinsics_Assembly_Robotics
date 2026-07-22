@@ -26,8 +26,11 @@ mkdir -p "$OUT" "$BAGDIR"
 
 cleanup_sim() {
   local pids
-  pids=$(ps aux | grep -E "gz sim|aic_model|aic_engine|aic_adapter|static_transform_publisher|component_container|rmw_zenohd|ros2 bag record" \
-         | grep -v grep | awk '{print $2}')
+  # Match every per-trial ROS launch child (robot_state_publisher + topic_tools/relay
+  # leaked ~0.5GB each across trials and OOM'd training — widen the net). Exclude the
+  # bash -c wrapper whose cmdline embeds this function text (declare -f), or we self-kill.
+  pids=$(ps aux | grep -E "gz sim|aic_model|aic_engine|aic_adapter|static_transform_publisher|component_container|rmw_zenohd|robot_state_publisher|topic_tools/relay|ros_gz_bridge|parameter_bridge|ros2 bag record" \
+         | grep -vE "grep|declare -f|cleanup_sim|run_trial|run_ep" | awk '{print $2}')
   [ -n "$pids" ] && kill -9 $pids 2>/dev/null
   sleep 3
 }

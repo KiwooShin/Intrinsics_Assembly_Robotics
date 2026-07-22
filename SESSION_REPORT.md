@@ -1381,3 +1381,17 @@ behaviors it must serve still collide, so you get a better blend, not two modes.
 the unimodal-BC ceiling the literature predicts. Net: **m3c stays the reliable near-aligned
 champion; m3f is the best all-round single policy; the clean both-zones fix remains a multimodal
 head or residual RL on a frozen base.** Adopt-decision: keep m3c as champion (do not replace).
+
+### 03:00 ops — the RAM leak recurred through NEW node types (robot_state_publisher, relay)
+
+A liveness check after the m3f evals found 90 GB "used" with **zero** sim processes: **312
+leaked ROS launch children — 165 `robot_state_publisher` + 147 `topic_tools/relay`, ~0.5 GB
+each** (one pair per trial across the day's evals). Same leak class as the earlier
+aic_adapter/tf-pub OOM, but these node types were **not** in `cleanup_sim`'s kill pattern, so
+they accumulated silently. Purged all 312 → **90 GB used → 3 GB used, 117 GB free**. Fix:
+widened the `cleanup_sim` grep in `eval_curriculum.sh` + `collect_curriculum.sh` to include
+`robot_state_publisher|topic_tools/relay|ros_gz_bridge|parameter_bridge`, **and** added a
+self-kill guard (`grep -vE "declare -f|cleanup_sim|run_trial|run_ep"`) so the pattern can't
+match the `bash -c` wrapper whose cmdline embeds the function text. Lesson: per-trial teardown
+must kill the whole launch's node set (or process group), not a hand-listed subset — a missing
+node type is invisible until it OOMs the next training.

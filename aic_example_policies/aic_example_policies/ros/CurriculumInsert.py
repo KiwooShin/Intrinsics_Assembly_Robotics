@@ -93,6 +93,27 @@ def wrench_force_mag(force_xyz: object) -> float:
     return float(np.linalg.norm(f))
 
 
+def contact_spike(force_now: object, force_ref: object, threshold: float) -> bool:
+    """True when the force magnitude has DEVIATED from a reference by > threshold.
+
+    On this rig the wrist F/T is bias-dominated: |F| reads ~20 N in free-space descent
+    (plug weight / sensor bias) and DROPS to ~7-8 N when the plug tip contacts the port
+    and its weight is supported. So contact is a *change* in |F| (here a drop of ~13 N),
+    not an absolute high reading — an absolute threshold would fire backwards. This
+    detects the change in either direction relative to the per-chunk baseline captured
+    at re-inference time.
+
+    Args:
+        force_now: Current ``(fx, fy, fz)`` force (N).
+        force_ref: The chunk-start reference ``(fx, fy, fz)`` force (N).
+        threshold: Deviation magnitude in newtons that counts as a contact event.
+
+    Returns:
+        ``abs(|force_now| - |force_ref|) > threshold``.
+    """
+    return abs(wrench_force_mag(force_now) - wrench_force_mag(force_ref)) > threshold
+
+
 def integrate_chunk_targets(
     position: np.ndarray,
     quaternion: np.ndarray,
@@ -446,9 +467,12 @@ try:  # pragma: no cover - exercised only inside the aic_model runtime.
             virt = hover.copy()
             floor_z = port_tf.translation.z - 0.020  # hard floor: 20mm below mouth
             # Contact-gated early re-inference (CURR_REACT_WRENCH_N > 0 enables it):
-            # on a force spike mid-chunk, stop executing the free-space-planned chunk
-            # and re-infer with the contact observation. 0 = off => baseline behaviour.
+            # if |F| DEVIATES from the per-chunk baseline by more than this many newtons
+            # mid-chunk (rig contact shows as a ~13 N drop, not a spike — see
+            # contact_spike), stop executing the free-space-planned chunk and re-infer
+            # with the contact observation. 0 = off => baseline behaviour byte-identical.
             react_n = _f("CURR_REACT_WRENCH_N", 0.0)
+            f_base = None  # free-space force baseline, captured once at phase-2 start
             start = self.time_now()
             cycles = 0
             while (self.time_now() - start).nanoseconds * 1e-9 < budget_s:
@@ -456,6 +480,9 @@ try:  # pragma: no cover - exercised only inside the aic_model runtime.
                 if obs is None:
                     self.sleep_for(0.1)
                     continue
+                if f_base is None:  # capture the free-space baseline once, at the hover
+                    wfb = obs.wrist_wrench.wrench.force
+                    f_base = (wfb.x, wfb.y, wfb.z)
                 chunk, pos, _quat = spec.predict_chunk(obs)
                 for k in range(exec_steps):
                     step = chunk[k, :3] * DT_FRAME
@@ -479,10 +506,10 @@ try:  # pragma: no cover - exercised only inside the aic_model runtime.
                         ob = get_observation()
                         if ob is not None:
                             wf = ob.wrist_wrench.wrench.force
-                            if wrench_force_mag((wf.x, wf.y, wf.z)) > react_n:
+                            if contact_spike((wf.x, wf.y, wf.z), f_base, react_n):
                                 self.get_logger().info(
                                     "CurriculumInsert: wrench-gate re-infer "
-                                    f"(|F|>{react_n:.1f}N) at chunk step k={k}")
+                                    f"(|dF|>{react_n:.1f}N vs chunk baseline) at k={k}")
                                 break
                 cycles += 1
                 if cycles % 8 == 0:

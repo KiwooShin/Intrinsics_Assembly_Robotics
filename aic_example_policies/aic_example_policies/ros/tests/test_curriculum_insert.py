@@ -104,5 +104,24 @@ class WrenchForceMagTest(unittest.TestCase):
                 ci.wrench_force_mag(bad)
 
 
+class ContactSpikeTest(unittest.TestCase):
+    """``contact_spike`` = |mag change| > threshold, catching the rig's contact DROP."""
+
+    def test_detects_contact_drop(self) -> None:
+        # Free-space ~20 N -> contact ~7 N (a ~13 N drop) fires at threshold 6.
+        self.assertTrue(ci.contact_spike((0.0, 0.0, 7.0), (0.0, 0.0, 20.0), 6.0))
+
+    def test_ignores_small_change(self) -> None:
+        # Free-space jitter around the ~20 N baseline does not fire.
+        self.assertFalse(ci.contact_spike((0.3, 0.0, 20.2), (0.0, 0.0, 20.0), 6.0))
+
+    def test_detects_upward_change_too(self) -> None:
+        # Deviation is direction-agnostic: a spike up also fires.
+        self.assertTrue(ci.contact_spike((0.0, 0.0, 30.0), (0.0, 0.0, 20.0), 6.0))
+
+    def test_exactly_threshold_does_not_fire(self) -> None:
+        self.assertFalse(ci.contact_spike((0.0, 0.0, 14.0), (0.0, 0.0, 20.0), 6.0))
+
+
 if __name__ == "__main__":
     unittest.main()

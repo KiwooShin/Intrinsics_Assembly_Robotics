@@ -1268,3 +1268,28 @@ to 2mm but at the cost of the inner zone unless the mixture is rebalanced. Next 
 whether a *balanced* corpus (aligned + late-correction, or contact-gated search) can
 hold BOTH zones ≥2/3 — the m3f hypothesis. Multi-agent cycle analysis + a lat0 (aligned)
 re-eval of m3e launched to (a) confirm the translation mechanism and (b) design m3f.
+
+### 01:30 CORRECTION — the policy is a deterministic L1 head, NOT a CVAE/ACT
+
+A multi-agent cycle analysis (results-forensics + literature + plan-critique) caught,
+and I verified in code, that several prior entries here mislabel the deployed model as a
+"force-conditioned ACT with CVAE latent." **It is not.** `opt/train_v3.py:464` trains
+with plain `F.l1_loss` (+ an optional push-in-weighted per-frame L1 and an aux head);
+`DeployACT._Policy` (L79-102) is a deterministic 3-camera CNN encoder + MLP head
+(`Linear(feat*3+state,512)→ReLU→512→ReLU→Linear(512,K*6)`). There is **no CVAE, KL,
+latent, or reparameterization** anywhere in the training/model code (grep-confirmed).
+
+Why this matters (it is the mechanism, not a footnote): a deterministic L1 head learns
+the **conditional-median** action over the demo mixture and structurally cannot represent
+"descend-straight" and "translate-then-descend" as two modes at one near-mouth state. So
+adding outward-search (late-correction) demos **re-centers that single median outward**
+rather than adding a mode — which is exactly the observed capture *translation*
+(1 mm 3/3→2/3→1/3 while 2 mm 0→1/3→2/3). This is the textbook unimodal-BC mode-migration
+that motivated ACT's CVAE (2304.13705) and Diffusion Policy (2303.04137). The corpus is
+~83% aligned *by frames*, so the effect is minority-mode **over-generalization**, not
+majority dilution. The literate remedies: a genuinely multimodal action head (real
+ACT-CVAE or diffusion/flow) so the two behaviors coexist as force/vision-gated modes, or
+**residual RL on a frozen m3c base** (IndustReal 2305.17110, ResiP 2407.16677, IBRL
+2311.02198) so wide capture is an additive correction that cannot overwrite the aligned
+descent. `--pushin-weight` is a scalar terminal-frame loss weight (moves the median),
+not a multimodality mechanism — it repaired the m3 dilution but cannot separate modes.

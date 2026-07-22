@@ -13,6 +13,72 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). Newest: `demo/policy_v
 
 ---
 
+## 2026-07-22 01:40 — RUN #4 cycle 7: m3e verdict — capture TRANSLATES (not expands); architecture corrected; freeze-and-polish decided
+
+**GOAL:** learned all-sensor insertion via easy→hard curriculum, as a *showcase*
+(not a submission). Banked: **M1 aligned 3/3 seats (88→94)**, **M2 capture [1,2) mm**,
+wrench ablation, **m3c adopted** (lat1 3/3 @ 94), **m3d first-ever 2 mm seat** (1/3 @ 93).
+
+**Avg score (this window, staged official_2, n=3/cell, parse total:+tier_3):** the
+m3e dose iteration (+18 late-correction demos total) completed. Seats (engine ~92–94):
+
+| corpus (late demos) | 1 mm seats | 2 mm seats | reading |
+| --- | --- | --- | --- |
+| m3c (0) | **3/3** | 0/3 | reliable inner band |
+| m3d (+9) | 2/3 | 1/3 | first 2 mm seat |
+| m3e (+18) | 1/3 | **2/3** | 2 mm first majority |
+
+**Finding — capture TRANSLATES outward, it does not EXPAND.** As offset-recovery
+demos are added, 2 mm climbs 0→1/3→2/3 while 1 mm erodes 3/3→2/3→1/3 (monotone,
+anti-correlated; joint-pattern Monte-Carlo p≈0.007 under a noise null; seats are
+wide-margin 92–94 vs misses 0/1/43, so the 3–18 pt scoring noise cannot flip a cell —
+the weakness is only n=3 sampling). An in-flight **lat0 (aligned 0 mm) re-eval** shows
+r1 still seats (92.45), so the honest phrasing is a **1 mm inner-band erosion with the
+center preserved**, not a clean whole-window shift.
+
+**Architecture correction (a multi-agent-analysis catch, now verified in code).** The
+deployed policy has been described as a "force-conditioned ACT with CVAE latent" — that
+is **inaccurate**. `opt/train_v3.py:464` uses plain `F.l1_loss`; `DeployACT._Policy`
+(L79-102) is a deterministic 3-cam CNN encoder + MLP head regressing K×6 (no CVAE, KL,
+latent, or reparameterization anywhere). It is a **deterministic L1-regression chunk
+policy** that learns the *conditional-median* action. That is exactly why capture
+translates: adding outward-search demos **re-centers the single median** instead of
+adding a second mode — textbook unimodal-BC mode-migration (cf. the CVAE/diffusion
+motivation in ACT 2304.13705, Diffusion Policy 2303.04137). The corpus is ~83% aligned
+*by frames*, so this is minority-mode **over-generalization**, not majority dilution —
+a naive reweight is not an obvious fix. SESSION_REPORT + memory to be corrected to match.
+
+**Multi-agent cycle analysis (CLAUDE.md §4):** three lenses (results-forensics,
+literature-comparison, plan-critique) + synthesis. Unanimous: the crisp 3-point
+dose-response + a correctly-named mechanism + a proposed remedy is a **stronger showcase
+artifact than a marginally-higher single capture number** (which n=3 could not even prove
+distinct from m3d/m3e). Pre-registered adopt rule (both zones ≥2/3) NOT met → **m3c stays
+champion; m3e is a 2 mm specialist.**
+
+**What's missing:** (1) lat0 n=3 to finalize "translation vs 1 mm-dip" (r1 seated; r2/r3
+in flight). (2) A *single* policy that holds both 1 mm and 2 mm ≥2/3 — the literate
+remedy is a genuinely multimodal head (real ACT-CVAE / diffusion) or residual-RL on a
+frozen m3c base (IndustReal 2305.17110, ResiP 2407.16677, IBRL 2311.02198), beyond this
+window. (3) Showcase artifacts: `showcase.html` is stale (no M1/M2/M3 content); the only
+insertion GIF is an *oracle* demo, not a learned rollout; no SESSION_REPORT RUN-#4 summary
+table or memory entry. (4) SC transfer + approach-composition remain (approach is
+camera-resolution-capped ~22.7 mm — the run-#3 wall).
+
+**Next 4 h (freeze-and-polish is the spine; one bounded m3f attempt bolted on):**
+1) Let `results/m3e_lat0` finish; record the aligned verdict (translation vs dip).
+2) **Polish (committed, done by ~T-10h regardless):** rewrite `dashboard/showcase.html`
+with the RUN-#4 M1→M3 arc + dose-response table + named mechanism → republish artifact;
+capture a **genuine learned-seat GIF** (one KEEP_BAG m3c aligned trial → render) →
+`demo/`; SESSION_REPORT summary table + memory correction.
+3) **Insurance (zero retrain):** two-specialist force-router (m3c ≤1 mm + m3e ≥2 mm) —
+near-guarantees a both-zones seating demo from existing checkpoints.
+4) **One m3f shot (secondary, single):** oversample aligned demos by *copying* ep dirs
+(train_v3 `_expand_globs` de-dups globs — repeating a glob silently no-ops), curate late
+demos to ≥2 mm only, pushin 8, retrain (~2 min), eval lat1/lat2 n=3; adopt only if both
+≥2/3, else log as a 4th dose-response point. **Reject** more late-demos (falsified).
+Hard fallback-to-freeze if any time-box slips. Commits this cycle: 07dde68 (m3e verdict)
++ this entry.
+
 ## 2026-07-21 21:40 — RUN #4 cycle 6: RAM-leak root-caused + fixed; m3d (late-correction) under eval
 
 **GOAL:** learned all-sensor insertion via easy→hard curriculum. Banked: M1 aligned

@@ -1293,3 +1293,16 @@ ACT-CVAE or diffusion/flow) so the two behaviors coexist as force/vision-gated m
 2311.02198) so wide capture is an additive correction that cannot overwrite the aligned
 descent. `--pushin-weight` is a scalar terminal-frame loss weight (moves the median),
 not a multimodality mechanism — it repaired the m3 dilution but cannot separate modes.
+
+### 01:13 — m3e aligned (lat0) re-eval: 3/3 — the erosion is a 1 mm DEAD-ZONE, not a slide
+
+m3e at 0 mm (aligned): **3/3 seats @ 92.45 / 93.55 / 93.49**. So the center is fully
+retained and m3e's offset profile is **non-monotonic**: 0 mm 3/3 → 1 mm 1/3 → 2 mm 2/3.
+The reliable band did not translate as one block; it **split into two competence lobes**
+(a retained aligned mode + a gained ~2 mm mode) with a **dead-zone at the 1 mm boundary**
+between them. This is the sharper, more precise reading of the "translation" trend: a
+single L1 conditional-median forced between two modes seats at each mode but **blends to
+neither at their boundary** — the textbook unimodal failure at a mode boundary (predicted
+by the plan-critique lens before the re-eval landed). The dose-response rows are unchanged
+(1 mm 3/3→2/3→1/3, 2 mm 0→1/3→2/3 across m3c/m3d/m3e); lat0 adds the third offset point
+that distinguishes "band splits / dead-zone" from "band slides." Showcase + progress updated.

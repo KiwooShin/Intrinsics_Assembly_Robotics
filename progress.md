@@ -55,8 +55,9 @@ artifact than a marginally-higher single capture number** (which n=3 could not e
 distinct from m3d/m3e). Pre-registered adopt rule (both zones ≥2/3) NOT met → **m3c stays
 champion; m3e is a 2 mm specialist.**
 
-**What's missing:** (1) lat0 n=3 to finalize "translation vs 1 mm-dip" (r1 seated; r2/r3
-in flight). (2) A *single* policy that holds both 1 mm and 2 mm ≥2/3 — the literate
+**What's missing:** (1) lat0 n=3 — **RESOLVED**: m3e at 0 mm seats **3/3 (92–94)**, so the
+center is retained and the 1 mm erosion is a **dead-zone** (the band splits into a retained
+aligned lobe + a gained 2 mm lobe), not a slide — the sharper reading of the trend. (2) A *single* policy that holds both 1 mm and 2 mm ≥2/3 — the literate
 remedy is a genuinely multimodal head (real ACT-CVAE / diffusion) or residual-RL on a
 frozen m3c base (IndustReal 2305.17110, ResiP 2407.16677, IBRL 2311.02198), beyond this
 window. (3) Showcase artifacts: `showcase.html` is stale (no M1/M2/M3 content); the only

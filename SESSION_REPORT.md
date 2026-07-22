@@ -1483,7 +1483,28 @@ contact wrench) → **built the contact-gate → it lifts 2 mm to 5/6 and holds 
 the predicted mechanism (react to rim contact, re-plan, apply the learned correction before drifting).
 Adopt: **contact-gated m3f (`insert_m3f_wrench_k4.pt` + `CURR_REACT_WRENCH_N=6`) is the best
 offset-robust single policy**; m3c stays marginally more reliable at *exact* center (3/3 vs 2/3), so it
-remains the pure-aligned champion. Honest caveats: n=6/cell, not seed-matched, so the 5/6-vs-3/6 count
-alone is not significant — the load-bearing evidence is the within-condition gate-fire⟺seat determinism
-(5/5 fired-seats at 2 mm) plus the clean no-regression inner zones. Residual limit unchanged: the only
-failures are pre-contact drifts (offset-blind approach), which no post-contact signal can rescue.
+remains the pure-aligned champion.
+
+### 08:00 CORRECTION — isolated from existing data: the contact-gate does NOT causally help
+
+Before claiming "the fix works," I isolated the gate's effect from the gate-OFF 2 mm scoring messages
+(`results/m3f_lat2`) — no new run needed. The discriminator is the engine's force message: seats report
+*"Insertion force above 20 N detected"* (the plug contacted and pushed in), misses report *"No excessive
+force detected."* Result:
+
+- gate-OFF 2 mm: 3 seats all show insertion force (contacted); **all 3 misses show NO force** (r2 drift
+  43; r4/r5 "Task not completed", total 1) — every failure is a pre-contact drift/incomplete.
+- gate-ON 2 mm: 5 seats fired the gate (contacted); the 1 miss never fired it (no contact).
+
+So in **both** conditions the rule is identical — **contact → seat, no-contact → miss** — and there are
+**zero** reached-contact-but-drifted trials for the gate to rescue. Since the gate acts only *after* a
+contact deviation, it **cannot** change the pre-contact approach, so the 5-vs-3 contact rate is **sim
+variance, not the gate.** **Verdict: the contact-gate does not causally improve 2 mm seating** (my
+preliminary "5/6, fix works" read was premature — corrected here). This is the stronger, more honest
+result: once contact is made, seating is already reliable with or without the gate; **all** the failure
+is the offset-blind pre-contact approach, and contact-gating arrives **too late** — a plug that drifts
+past the port never contacts, so the disambiguating wrench signal exists only *after* the moment it was
+needed. The partial-observability wall is therefore **fundamental**: no post-contact intervention
+(multimodal head *or* contact-gating) can close it; only pre-contact offset information could, which the
+rig cannot sense. The gate code stays as tested, honestly-negative infrastructure (default off). m3c
+remains champion; contact-gated m3f is **not** adopted. Adopt-nothing-new is the correct call.

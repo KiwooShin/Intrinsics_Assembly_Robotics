@@ -1356,3 +1356,28 @@ so it is the best *both-zones* single policy, not strictly dominant. This closes
 dead-zone observed → diagnosed as demo-boundary conflict → curation predicted to fix →
 confirmed. It is a data-level mitigation of a unimodal-head limit; the full fix is still a
 multimodal action head or residual RL.
+
+### 02:56 — m3f n=6 confirmation: the n=3 was partly luck; adopt bar NOT met, but the mechanism IS confirmed
+
+Extended both offsets to n=6 (matched harness, +3 reps each):
+
+| offset | n=3 | **n=6** | reading |
+| --- | --- | --- | --- |
+| 1 mm | 2/3 | **4/6 (67%)** | holds — majority |
+| 2 mm | 2/3 | **3/6 (50%)** | softened to a coin-flip |
+
+So the pre-registered adopt rule (BOTH ≥2/3) is **NOT met at n=6** — the n=3 "2/3 at 2 mm"
+was partly sampling luck (2 mm regressed to 3/6). Honest verdict: **m3f is the best-BALANCED
+single policy** — the only checkpoint that seats at *both* 1 mm (67%) and 2 mm (50%) at
+non-trivial rates (m3c: 3/3 & 0/3; m3e: 1/3 & 2/3) — but it does not reliably hold both. The
+misses are mostly "Task not completed / no contact" (policy stalls above the port) plus one
+2 mm drift.
+
+**Why this is the stronger result, not a disappointment.** The mechanism made a falsifiable
+prediction — *remove the 1.5 mm demos and the 1 mm zone should recover* — and it did (1/3 → 4/6),
+confirming the diagnosis. But the 2 mm zone could not simultaneously be made reliable: a single
+L1 conditional-median can be **rebalanced** (improving which trade-off it strikes) but the two
+behaviors it must serve still collide, so you get a better blend, not two modes. That is exactly
+the unimodal-BC ceiling the literature predicts. Net: **m3c stays the reliable near-aligned
+champion; m3f is the best all-round single policy; the clean both-zones fix remains a multimodal
+head or residual RL on a frozen base.** Adopt-decision: keep m3c as champion (do not replace).

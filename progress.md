@@ -13,6 +13,31 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). **Newest (RUN #4 learn
 
 ---
 
+## 2026-07-23 04:17 — RUN #5 cycle 4: maintenance (deliverables complete + audit-verified)
+
+No runs this window. The demo deliverables are complete, pushed, and passed an independent
+honesty audit; this cycle is maintenance only.
+
+**Avg score:** n/a — no sim runs this window (research question exhausted in RUN #4; no new
+experiments manufactured, per the maintenance directive).
+
+**What's missing:** nothing outstanding. The user-requested demos shipped and were hardened:
+the exciting **dynamic** gallery (`e444e0e`: 3 mm SEAT 93.3, 2 mm SEAT 92.9, 1.2 mm honest MISS
+56.8, SC angled 87, combined SFP+SC — in the liked 704 px / ~72-frame format; the flat
+5-per-milestone gallery was retired as visually static). A 3-auditor honesty Workflow then verified
+every demo score against `results/*/scoring.yaml` (all clean) and caught five **framing** overclaims
+elsewhere in the repo, all fixed (`a78e6e9`): the 119.4/300 "successful insertions" relabeled as
+tier-2 proximity (no seat); the headline reworded from "camera-only localization" to
+"privileged-staged … no ground-truth pose fed to the network"; the showcase's fixed "[1,2) mm
+capture radius" scoped to the base `m3c` specialist and reconciled with the `m4` model's 2–3 mm
+seats (scene-dependent, non-monotonic); and the M1/M2 score/label juxtapositions corrected. The
+showcase Artifact (2333d298) was re-published to match.
+
+**Next 4 h:** maintain the heartbeat + watchdog to STOP (07-24 10:30); write the next cycle entry
+at the 4 h mark. If the user asks for more/different demos, produce them in the liked style with
+honest verified scores (dynamic offsets at standoff ≤ 0.025 to avoid the OOD runaway seen at
+30–40 mm drops). System idle: 0 sim procs, 117 GB RAM free, 1.6 TB disk, clean tree at `a78e6e9`.
+
 ## 2026-07-22 23:50 — RUN #5 cycle 3: demo-video gallery, then a pivot to *dynamic* / challenging demos
 
 No new training this window — all rollouts use the standing `m3c` / `m4_wide` / `sc_insert`

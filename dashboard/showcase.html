@@ -125,7 +125,7 @@
 
   <div class="stats">
     <div class="stat"><div class="n good">3 / 3</div><div class="l">First learned-policy seats — aligned insertion, engine 88→94 (a project first)</div></div>
-    <div class="stat"><div class="n acc">[1, 2)&nbsp;mm</div><div class="l">Mapped learned capture radius from a staged start</div></div>
+    <div class="stat"><div class="n acc">2–3&nbsp;mm</div><div class="l">Staged offsets the wider-trained <code>m4</code> model seats (92.9 / 93.3); the base <code>m3c</code> specialist's radius was [1,&nbsp;2)&nbsp;mm — capture is scene-dependent, not a fixed ceiling</div></div>
     <div class="stat"><div class="n bad">22.7&nbsp;mm</div><div class="l">Blind-task localization error (vs ~2–5&nbsp;mm to seat) — the wall</div></div>
     <div class="stat"><div class="n">0→1/3→2/3</div><div class="l">2&nbsp;mm-offset seats as correction demos are added — capture <em>translates</em> (a unimodal-median artifact)</div></div>
   </div>
@@ -238,7 +238,7 @@
 
   <div class="prose">
   <h3>Mapping the capture radius — and a dose-response experiment</h3>
-  <p>With aligned insertion solid, the natural question is <b>how far off-center can the policy start and still seat?</b> Sweeping the staged lateral offset gives a clean answer for the base specialist (trained on pure-vertical oracle demos): a capture radius of <b>[1, 2)&nbsp;mm</b> — reliable at 1&nbsp;mm, and beyond ~2&nbsp;mm the policy <em>drifts away</em> rather than searching, exactly because its demonstrations contain no rim-contact recovery to imitate.</p>
+  <p>With aligned insertion solid, the natural question is <b>how far off-center can the policy start and still seat?</b> Sweeping the staged lateral offset gives a clean answer for the base specialist (trained on pure-vertical oracle demos): a capture radius of <b>[1, 2)&nbsp;mm</b> — reliable at 1&nbsp;mm, and beyond ~2&nbsp;mm the policy <em>drifts away</em> rather than searching, exactly because its demonstrations contain no rim-contact recovery to imitate. <b>Update:</b> that [1,&nbsp;2)&nbsp;mm figure is specific to the base pure-vertical specialist (<code>m3c</code>). The later wider-trained <code>m4</code> model seats staged offsets of <b>2&nbsp;mm (92.9) and 3&nbsp;mm (93.3)</b>, while some sub-1&nbsp;mm scenes still miss — so capture is <em>scene-dependent and non-monotonic</em>, not a fixed [1,&nbsp;2)&nbsp;mm ceiling.</p>
   <p>So the next experiment adds that missing content: <b>late-correction demos</b> (descend at the offset, correct laterally near the mouth, then seat) are folded into the corpus in increasing amounts — 0, then 9, then 18 episodes (checkpoints m3c → m3d → m3e). The result is the centerpiece below.</p>
   </div>
 
@@ -327,7 +327,7 @@
 
   <footer>
     <div class="kv">UR5e · SFP/SC fiber insertion · Gazebo · action-chunking visuomotor policy + curriculum · autonomous multi-day research run</div>
-    <p style="margin-top:.6rem">Metric protocol: matched-seed in-sim eval suite, parse <code>total</code>+tier_3, n≥3 per claim; all figures from this project's own runs. Honest scope: the <em>blind</em> full-task seat is retired with a documented sensor root cause; learned seats are from a training-only privileged-staged start (a capability study, not a scored submission). Capture radius [1,2)&nbsp;mm; the 2&nbsp;mm frontier is a translation trade-off with a named, unimplemented fix.</p>
+    <p style="margin-top:.6rem">Metric protocol: matched-seed in-sim eval suite, parse <code>total</code>+tier_3, n≥3 per claim; all figures from this project's own runs. Honest scope: the <em>blind</em> full-task seat is retired with a documented sensor root cause; learned seats are from a training-only privileged-staged start (a capability study, not a scored submission). Capture radius [1,2)&nbsp;mm for the base <code>m3c</code> specialist; the wider-trained <code>m4</code> model seats 2–3&nbsp;mm staged offsets, so capture is scene-dependent, not a fixed ceiling.</p>
   </footer>
 
 </div>

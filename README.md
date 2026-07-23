@@ -1,6 +1,6 @@
 # Camera-Only Imitation Learning for Robotic Cable Insertion
 
-**A learned visuomotor policy that inserts SFP/SC fiber-optic plugs into NIC ports with a UR5e — localizing from RGB cameras only (no ground-truth poses, no depth) and seating with wrist force.**
+**A learned visuomotor policy that seats SFP/SC fiber-optic plugs into NIC ports with a UR5e — privileged-staged above the known port, then driven home from RGB cameras + wrist force with no ground-truth pose fed to the network.** (Camera-only *port localization* from a cold start is shown to be sensor-limited on this rig — the 128&nbsp;px cameras can't resolve a 2&nbsp;mm port; see the write-up.)
 Built on the [Intrinsic AI for Industry Challenge](https://www.intrinsic.ai/events/ai-for-industry-challenge) toolkit (Gazebo simulation, real contact physics, force-aware scoring). This fork adds the full research pipeline: oracle distillation, ACT-style policy learning, a hardened evaluation harness, and a statistics-first experiment log.
 
 ## Milestones
@@ -17,13 +17,13 @@ The same UR5e and the same curriculum framework seating **two very different con
 
 ![Milestone 1: first learned-policy seat](docs/media/milestone1_first_seat_2026-07-22_08h.gif)
 
-The project's first insertion by a **learned** policy — every prior seat came from the scripted oracle. Staged above an aligned port, the policy (3 RGB cameras + wrist force, **no ground-truth pose at run time**) descends and seats the SFP plug. Engine **93/100** (tier-3); **3/3** on the matched-seed suite.
+The project's first insertion by a **learned** policy — every prior seat came from the scripted oracle. Privileged-staged above the aligned port (true port TF), the policy then descends and seats the SFP plug from 3 RGB cameras + wrist force with **no ground-truth pose fed to the network**. Best demo trial **93/100** (tier-3); **3/3** on the matched-seed suite (mean **~88/100**).
 
 ### Milestone 2 — Off-center insertion (2&nbsp;mm)
 
 ![Milestone 2: seating a 2mm-offset plug](docs/media/milestone2_offset_2mm_2026-07-22_09h.gif)
 
-Growing the staged lateral offset, the policy learns to correct at the mouth and seat a **2&nbsp;mm-offset** plug (engine **92.7**). Off-center recovery is the policy's headline dynamic skill — the plug is commanded well off-center and has to travel and correct during a *blind* descent (the offset isn't visible until contact). It does not always succeed; reliability at a given offset varies scene-to-scene (see **Dynamic rollouts** below), and the deeper partial-observability limit — plus a contact-gated fix that was built, tested, and honestly shown to arrive too late — is dissected in the write-up.
+Growing the staged lateral offset, the policy learns to correct at the mouth and seat an off-center plug — a **verified 2&nbsp;mm staged seat scores 92.9, and even 3&nbsp;mm seats (93.3)**, both shown under **Dynamic rollouts** below. Off-center recovery is the policy's headline dynamic skill — the plug is commanded well off-center and has to travel and correct during a *blind* descent (the offset isn't visible until contact). It does not always succeed; reliability at a given offset varies scene-to-scene (see **Dynamic rollouts** below), and the deeper partial-observability limit — plus a contact-gated fix that was built, tested, and honestly shown to arrive too late — is dissected in the write-up.
 
 ### Milestone 3 — Robustness across 10 random locations
 
@@ -35,11 +35,11 @@ The **same seating policy on 10 fully-randomized scenes** — different board po
 
 ![Milestone 4: SC angled insertion](docs/media/milestone4_sc_insertion_2026-07-22_18h.gif)
 
-A genuinely harder *second* connector task. The **SC/LC fiber port is physically rotated**, so a top-down descent rams it — the plug must be inserted along a **pose-conditioned axis**. A **separate `sc_insert` model** (distinct from the SFP policy; 3 RGB cameras + wrist force, no ground-truth pose at run time) learns this and **seats 5/6 SC poses at ~85–87**. Solving it required matching the reference oracle's slow continuous descent so the impedance controller converges onto the tilted axis (a top-down or fast descent leaves the plug ~3.5 mm off). Honest scope: the scripted oracle itself only cleanly seats ~37 % of SC poses, so this is a proof of *learned* capability on the seating subset; the SFP task keeps its own `m3c`/`m4` models.
+A genuinely harder *second* connector task. The **SC/LC fiber port is physically rotated**, so a top-down descent rams it — the plug must be inserted along a **pose-conditioned axis**. A **separate `sc_insert` model** (distinct from the SFP policy; privileged-staged, then 3 RGB cameras + wrist force with no ground-truth pose fed to the network) learns this and **seats 5/6 SC poses at ~85–87**. Solving it required matching the reference oracle's slow continuous descent so the impedance controller converges onto the tilted axis (a top-down or fast descent leaves the plug ~3.5 mm off). Honest scope: the scripted oracle itself only cleanly seats ~37 % of SC poses, so this is a proof of *learned* capability on the seating subset; the SFP task keeps its own `m3c`/`m4` models.
 
 ### ⚡ Dynamic rollouts — challenging offsets, honestly scored
 
-The hard, high-movement cases. The plug is commanded **well off-center**, so it has to *travel* and correct a large offset during the blind descent (three RGB cameras + wrist force, **no ground-truth pose at run time**). Some seat, some don't — and the seat/miss split at a given offset depends on the scene, not just the magnitude, so both are shown.
+The hard, high-movement cases. From a **privileged-staged start** the plug is commanded **well off-center**, so it has to *travel* and correct a large offset during the blind descent (three RGB cameras + wrist force; the network sees **no ground-truth pose**). Some seat, some don't — and the seat/miss split at a given offset depends on the scene, not just the magnitude, so both are shown.
 
 | Large-offset recovery | Large-offset recovery |
 |:---:|:---:|
@@ -71,7 +71,7 @@ The hard, high-movement cases. The plug is commanded **well off-center**, so it 
 
 | Evaluation | Score | Notes |
 |---|---:|---|
-| **Best official-config eval (3 trials, /300)** | **119.4** | adopted checkpoint `v2_wide`, **with successful insertions** on the official poses |
+| **Best official-config eval (3 trials, /300)** | **119.4** | adopted checkpoint `v2_wide` — ~40/trial **tier-2 proximity/directed-approach**, **no tier-3 seat**; no camera-only checkpoint seats the official poses (the seats come from the curriculum's privileged-staged start) |
 | Oracle (scripted, ground-truth poses) | ≈93 / 100 per trial | distillation teacher; 97.5 % keep-rate over a 40-config collection campaign |
 | 180-s matched-seed suite, 15 configs (mean) | v2_wide 7.75 · p2_k8 5.29 · p1_k16 3.03 | harder stratified poses; officials-only sums: 97.7 / 64.9 / 68.8 (/300) |
 | Unit tests | 295 green | pure-logic seams for config gen, dataset prep, chunk ensembling, eval harness |
@@ -93,7 +93,7 @@ eval_suite.py + eval_batch.sh # matched-seed suites, IQM + paired-bootstrap CIs,
 
 - **Observation → action:** 3 RGB cameras + 7-D TCP state → chunk of K×6 TCP velocities; execute the first 4 actions, re-predict (receding horizon).
 - **Why image-based ACT (not point-cloud DP3):** the sim bridges RGB only — no depth topics.
-- **Deployment insight that unlocked scoring:** the stock velocity mode integrates its reference open-loop and freezes the arm; re-anchoring every chunk through position-mode targets took the score from 36 → 119.4.
+- **Deployment insight that unlocked scoring:** the stock velocity mode integrates its reference open-loop and freezes the arm; re-anchoring every chunk through position-mode targets took the *proximity* score from 36 → 119.4 (tier-2 only — a directed approach, not a seat).
 - **Dataset:** 93 oracle episodes across stratified + failure-driven collection phases.
 
 ## Engineering highlights

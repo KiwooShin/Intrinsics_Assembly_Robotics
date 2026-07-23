@@ -13,6 +13,45 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). **Newest (RUN #4 learn
 
 ---
 
+## 2026-07-22 23:50 — RUN #5 cycle 3: demo-video gallery, then a pivot to *dynamic* / challenging demos
+
+No new training this window — all rollouts use the standing `m3c` / `m4_wide` / `sc_insert`
+checkpoints. The work was **demonstration**: produce compelling milestone demo videos.
+
+| Experiment | Verdict | Key metric |
+|---|---|---|
+| 5-rollouts-per-milestone gallery (20 rollouts + 6 top-ups) | ✅ built, then **retired** | SFP seats 92.5–93.4 (M1–M3), SC 86–87 (M4) |
+| Combined SFP+SC "both connectors together" demo | ✅ shipped | SFP 93 / SC 87 side by side |
+| Dynamic large-offset sweep (footage kept regardless of seat) | ✅ shipped | 2 mm SEAT 92.94, 3 mm SEAT 93.34, 1.2 mm MISS 56.76, SC 86.28 |
+| High-standoff (25–40 mm drop) capture for more vertical motion | ❌ dropped | out-of-distribution → `total=0` runaways |
+
+**Avg score (this window, n=30 kept rollouts + 4 dynamic-sweep trials):** SFP seats cluster at
+**92.5–93.4/100**, SC seats at **86–87/100**; the dynamic sweep gave two large-offset SFP seats
+(2 mm 92.94, 3 mm 93.34), one honest SFP miss (1.2 mm 56.76), and one SC seat (86.28). Every score
+in the README traces to a `results/{demos5,topup5,faildemos5}/*/scoring.yaml`.
+
+**What's missing:** nothing on the *research* axis — the curriculum-insertion question was exhausted
+in RUN #4 (built + tested + honestly rejected the contact-gate; partial-observability wall is
+fundamental). The gap this window was **presentation**: the first gallery leaned on aligned /
+tiny-offset / straight-down scenes with almost no visible motion — the user flagged it "not
+exciting." Fixed by pivoting to **challenging, dynamic** scenarios (big lateral offsets where the
+plug visibly travels and corrects), rendered in the liked format (704 px 3-cam panels, ~72-frame
+window, exact-score captions). Two honest findings surfaced and were disclosed: (1) the
+high-standoff idea is OOD for the policy (staged >25 mm above the port → non-convergent runaway);
+(2) the offset seat/miss split is **scene-dependent** (a 3 mm offset seated while a 1.2 mm offset
+missed), so the earlier "capture radius ≈ 1 mm" framing was softened to "reliability varies
+scene-to-scene," and both a seat and a miss are shown rather than cherry-picking.
+
+**Next 4 h:** a 3-auditor honesty Workflow (score-forensics / consistency / overclaim) is verifying
+every README score and claim against the scoring records; apply any findings, then maintenance +
+heartbeat to STOP (07-24 10:30). Research question stays closed; the deliverable is the honest
+dynamic gallery + the showcase artifact.
+
+**Analysis sub-agents (CLAUDE.md §4):** launched a parallel Workflow with three independent
+auditors (score-forensics, consistency-critic, honesty/overclaim-critic) + a synthesis pass, each
+reading the repo and cross-checking README claims against `scoring.yaml` ground truth; findings are
+applied before this cycle closes.
+
 ## 2026-07-22 18:40 — RUN #5 cycle 2: SC (rotated-port) insertion solved — a second learned task
 
 **Avg score (this window):** tackled the more-challenging NEW task — **SC/LC fiber insertion**,

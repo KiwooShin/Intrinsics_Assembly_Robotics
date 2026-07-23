@@ -13,6 +13,37 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). **Newest (RUN #4 learn
 
 ---
 
+## 2026-07-22 18:40 — RUN #5 cycle 2: SC (rotated-port) insertion solved — a second learned task
+
+**Avg score (this window):** tackled the more-challenging NEW task — **SC/LC fiber insertion**,
+a genuinely harder connector (the SC port is physically *rotated*, so a top-down descent rams it;
+it needs a pose-conditioned insertion axis). Two results:
+
+| result | metric |
+| --- | --- |
+| SC **oracle** (CurriculumInsert, is_sc path) | seats sc_port_1 **@93.4** (== reference CheatCode 93.2) |
+| **learned `sc_insert`** (separate model, camera+force) | **5/6** sc_port_1 poses seated @85–87 |
+
+**Milestone 4** GIF (angled insertion) is in the README. SFP is untouched (m3c/m4; oracle still 96).
+
+**Getting there (the hard part):** a straight port of the SC axis only *partial*-seated (60, 0.01 m
+short) across every tuning knob. A definitive diagnostic — the real CheatCode oracle seats cfg_007
+@93 in this sim — proved SC *was* seatable and my curriculum adaptation had a bug. Root-caused by
+matching CheatCode step by step: the fix was a **slow (10 mm/s) continuous descent** letting the
+**xy-integrator accumulate** for fine alignment onto the tilted axis (a fast descent / integrator
+reset left the plug ~3.5 mm off → ram). Committed gated on `is_sc`; SFP byte-identical; +10 unit
+tests (25 total). Then collected SC demos, trained `sc_insert`, eval'd 5/6.
+
+**What's missing:** (1) the SC oracle only cleanly seats **~37 %** of sc_port_1 poses (rest partial
+~0.01 m short — a residual seat-depth/alignment margin on some poses), so `sc_insert` is a proof of
+learned capability on the seating subset, not yet all-pose-robust; more seating demos would help.
+(2) `sc_insert` scores ~85–87 vs SFP ~92–94 (small 14-demo corpus). (3) Milestone-3's ~10 % SFP
+runaway on random poses.
+
+**Next 4 h:** consolidate the two new milestones (robustness 9/10, SC insertion 5/6); optionally
+robustify `sc_insert` with more SC seating demos, or add a further fancy demo. Continue 4-hourly
+reports to STOP. Commits this window: b0a7d81 (M3) · 094f0aa · f3c799b (SC solved) · 36ce4fe (M4).
+
 ## 2026-07-22 14:30 — RUN #5 cycle 1 (new 48h push): robustness across 10 random locations
 
 **NEW DIRECTION (user, 2026-07-22 ~10:30):** insertion is solved — push to more challenging

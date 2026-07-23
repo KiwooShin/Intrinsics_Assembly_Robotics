@@ -255,3 +255,128 @@ def montage_lcr(left: np.ndarray, center: np.ndarray, right: np.ndarray,
     for k, p in enumerate(panels):
         canvas.paste(p, (k * (panel_w + gap), 0))
     return canvas
+
+
+def select_rollout_window(n_frames: int, insertion_frame: int, *, pre: int = 90,
+                          post: int = 14, target: int = 46) -> list[int]:
+    """Pick a subsampled frame-index window around the seating moment.
+
+    Trims a long rollout (mostly a static approach) down to the descent-and-seat
+    action: a window ending shortly after ``insertion_frame``, uniformly subsampled to
+    at most ``target`` frames so the resulting GIF is punchy rather than 500 frames long.
+
+    Args:
+        n_frames: Total frames available in the episode (> 0).
+        insertion_frame: Frame index where seating occurs; values ``<= 0`` (no
+            recorded seat) fall back to a window ending at the last frame.
+        pre: Frames to include before the seat.
+        post: Frames to include after the seat.
+        target: Maximum number of frames to return.
+
+    Returns:
+        A sorted list of frame indices into ``[0, n_frames)``.
+
+    Raises:
+        ValueError: If ``n_frames <= 0`` or ``target <= 0``.
+    """
+    if n_frames <= 0:
+        raise ValueError(f"n_frames must be > 0, got {n_frames}")
+    if target <= 0:
+        raise ValueError(f"target must be > 0, got {target}")
+    seat = insertion_frame if 0 < insertion_frame < n_frames else n_frames - 1
+    start = max(0, seat - pre)
+    end = min(n_frames, seat + post + 1)
+    idxs = list(range(start, end))
+    if len(idxs) > target:
+        step = len(idxs) / target
+        idxs = [idxs[min(len(idxs) - 1, int(i * step))] for i in range(target)]
+    return idxs
+
+
+def build_duo_gif(left_frames: list[Image.Image], right_frames: list[Image.Image],
+                  out_path: str, *, eyebrow: str, title: str, left_label: str,
+                  right_label: str, caption: str, left_badge: str = "",
+                  right_badge: str = "", left_badge_color: tuple[int, int, int] = SEAT,
+                  right_badge_color: tuple[int, int, int] = SEAT, subtitle: str = "",
+                  panel_w: int = 320, gap: int = 8, duration_ms: int = 80,
+                  title_card_frames: int = 16) -> str:
+    """Compose two rollouts side by side into one 'both together' demo GIF.
+
+    Plays a left rollout (e.g. an SFP fiber-plug insertion) and a right rollout (e.g. an
+    SC bayonet insertion into the rotated port) simultaneously under a shared header and
+    footer, each panel carrying its own connector label and result badge. The shorter
+    clip is padded by holding its final (seated) frame so both end together.
+
+    Args:
+        left_frames: Left rollout frames (RGB ``PIL.Image``), non-empty.
+        right_frames: Right rollout frames (RGB ``PIL.Image``), non-empty.
+        out_path: Destination ``.gif`` path.
+        eyebrow: Small uppercase kicker.
+        title: Headline shown on the title card and header bar.
+        left_label / right_label: Per-panel connector labels.
+        caption: One- to three-line explanation shown in the footer.
+        left_badge / right_badge: Per-panel result pills ("" hides).
+        left_badge_color / right_badge_color: Badge fills (SEAT / MISS / ACCENT).
+        subtitle: Optional second line on the title card.
+        panel_w: Per-panel width in pixels.
+        gap: Gap between the two panels.
+        duration_ms: Per-frame duration.
+        title_card_frames: How many frames to hold the title card.
+
+    Returns:
+        ``out_path``.
+
+    Raises:
+        ValueError: If either frame list is empty.
+    """
+    if not left_frames or not right_frames:
+        raise ValueError("both left_frames and right_frames must be non-empty")
+    n = max(len(left_frames), len(right_frames))
+
+    def _pad(frs: list[Image.Image]) -> list[Image.Image]:
+        return list(frs) + [frs[-1]] * (n - len(frs))
+
+    lf, rf = _pad(left_frames), _pad(right_frames)
+
+    def _panel(img: Image.Image) -> Image.Image:
+        w0, h0 = img.width, img.height
+        return img.resize((panel_w, round(panel_w * h0 / w0)), Image.BILINEAR)
+
+    ph = _panel(lf[0].convert("RGB")).height
+    label_h = 26
+    w = panel_w * 2 + gap
+    h = HEADER_H + label_h + ph + FOOTER_H
+    eb_font = _font("DejaVuSansMono-Bold.ttf", 11)
+    ti_font = _font("DejaVuSans-Bold.ttf", 19)
+    lab_font = _font("DejaVuSans-Bold.ttf", 13)
+    cap_font = _font("DejaVuSans.ttf", 12)
+    seq: list[Image.Image] = []
+    for i in range(n):
+        canvas = Image.new("RGB", (w, h), BG)
+        d = ImageDraw.Draw(canvas)
+        d.text((PAD, 10), eyebrow.upper(), font=eb_font, fill=ACCENT)
+        d.text((PAD, 26), title, font=ti_font, fill=INK)
+        ly = HEADER_H
+        d.rectangle([0, ly, w, ly + label_h], fill=PANEL)
+        d.text((PAD, ly + 6), left_label, font=lab_font, fill=ACCENT)
+        d.text((panel_w + gap + PAD, ly + 6), right_label, font=lab_font, fill=ACCENT)
+        py = ly + label_h
+        canvas.paste(_panel(lf[i].convert("RGB")), (0, py))
+        canvas.paste(_panel(rf[i].convert("RGB")), (panel_w + gap, py))
+        if left_badge:
+            _badge(d, panel_w - 8, py + ph - 18, left_badge, left_badge_color)
+        if right_badge:
+            _badge(d, w - 8, py + ph - 18, right_badge, right_badge_color)
+        fy = py + ph
+        d.rectangle([0, fy, w, h], fill=PANEL)
+        for j, line in enumerate(wrap_text(caption, cap_font, w - 2 * PAD)[:3]):
+            d.text((PAD, fy + 12 + j * 17), line, font=cap_font, fill=MUTED)
+        seq.append(canvas)
+    card = _title_card(w, h, eyebrow, title, subtitle)
+    full = [card] * title_card_frames + seq + [seq[-1]] * 10
+    full = [im.quantize(colors=128, method=Image.FASTOCTREE, dither=Image.Dither.NONE)
+            for im in full]
+    durs = [110] * title_card_frames + [duration_ms] * len(seq) + [220] * 10
+    full[0].save(out_path, save_all=True, append_images=full[1:], duration=durs,
+                 loop=0, optimize=True, disposal=2)
+    return out_path

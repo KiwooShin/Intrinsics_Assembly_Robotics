@@ -13,6 +13,21 @@ oracle demo `demo/oracle_demo_sfp_rail0_sfp_port_0.mp4`). **Newest (RUN #4 learn
 
 ---
 
+## 2026-07-23 08:21 — RUN #5 cycle 5: maintenance (steady state)
+
+No runs this window. Deliverables remain complete, pushed, and audit-verified; nothing new to
+build (maintenance directive: research exhausted, do not manufacture experiments).
+
+**Avg score:** n/a — no sim runs this window.
+
+**What's missing:** nothing outstanding. The dynamic demo gallery (`e444e0e`) and the honesty-audit
+fixes (`a78e6e9`, five framing overclaims corrected + showcase Artifact re-published) are the
+standing deliverables; all demo scores trace to `results/*/scoring.yaml`.
+
+**Next 4 h:** maintain heartbeat + watchdog to STOP (07-24 10:30); pick up immediately if the user
+requests more/different demos (dynamic offsets at standoff ≤ 0.025 in the liked format, honest
+verified scores). System idle: 0 sim procs, 117 GB RAM, 1.6 TB disk, clean tree at `1188aa1`.
+
 ## 2026-07-23 04:17 — RUN #5 cycle 4: maintenance (deliverables complete + audit-verified)
 
 No runs this window. The demo deliverables are complete, pushed, and passed an independent

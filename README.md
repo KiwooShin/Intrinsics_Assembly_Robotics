@@ -25,6 +25,12 @@ Growing the staged lateral offset, the policy learns to correct at the mouth and
 
 The **same seating policy on 10 fully-randomized scenes** — different board poses, NIC rails, and ports — seats **9/10 at ~93/100**, up from **7/10** before robustifying on a wider, pose-diverse corpus (`m4` vs `m3c`). The lone miss is a rare execution-failure/runaway (~10% across the distribution), disclosed in the tally rather than cropped out. Privileged-staged curriculum (a training-legal capability study; the *blind* full task is camera-resolution-limited — see the write-up).
 
+### Milestone 4 — SC (angled) fiber insertion — a separate model for a harder task
+
+![Milestone 4: SC angled insertion](docs/media/milestone4_sc_insertion_2026-07-22_18h.gif)
+
+A genuinely harder *second* connector task. The **SC/LC fiber port is physically rotated**, so a top-down descent rams it — the plug must be inserted along a **pose-conditioned axis**. A **separate `sc_insert` model** (distinct from the SFP policy; 3 RGB cameras + wrist force, no ground-truth pose at run time) learns this and **seats 5/6 SC poses at ~85–87**. Solving it required matching the reference oracle's slow continuous descent so the impedance controller converges onto the tilted axis (a top-down or fast descent leaves the plug ~3.5 mm off). Honest scope: the scripted oracle itself only cleanly seats ~37 % of SC poses, so this is a proof of *learned* capability on the seating subset; the SFP task keeps its own `m3c`/`m4` models.
+
 <details>
 <summary><b>Earlier runs</b> — camera-only approach, pre-curriculum</summary>
 

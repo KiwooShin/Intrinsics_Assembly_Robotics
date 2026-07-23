@@ -35,9 +35,11 @@ from opt.make_milestone_gif import (
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 DS = pathlib.Path.home() / "training" / "ds_demos"
-RESULTS = REPO / "results" / "demos5"
+RESULTS_DIRS = (REPO / "results" / "demos5", REPO / "results" / "topup5",
+                REPO / "results" / "faildemos5")
 MEDIA = REPO / "docs" / "media"
 SEAT = (67, 196, 131)
+MISS = (236, 122, 97)
 ACCENT = (49, 207, 192)
 
 
@@ -89,13 +91,30 @@ SPECS: dict[str, MilestoneSpec] = {
 }
 
 
-def _read_total(label: str, milestone: str) -> str:
-    """Return the engine ``total`` score string for a captured trial, or '' if absent."""
-    p = RESULTS / f"{milestone}_{label}" / "scoring.yaml"
-    if not p.exists():
-        return ""
-    m = re.search(r"^total:\s*([0-9.]+)", p.read_text(), re.MULTILINE)
-    return m.group(1) if m else ""
+def _read_trial(label: str, milestone: str) -> tuple[str, bool]:
+    """Return ``(total_score, seated)`` for a captured trial across the results dirs.
+
+    Searches every directory in ``RESULTS_DIRS`` for ``<milestone>_<label>/scoring.yaml``.
+    ``total_score`` is the rounded engine total ('' if unknown); ``seated`` is True when
+    tier-3 reports a successful cable insertion.
+    """
+    for base in RESULTS_DIRS:
+        p = base / f"{milestone}_{label}" / "scoring.yaml"
+        if not p.exists():
+            continue
+        text = p.read_text()
+        m = re.search(r"^total:\s*([0-9.]+)", text, re.MULTILINE)
+        total = f"{float(m.group(1)):.0f}" if m else ""
+        seated = "Cable insertion successful" in text
+        return total, seated
+    return "", False
+
+
+def _badge_for(total: str, seated: bool) -> tuple[str, tuple[int, int, int]]:
+    """Build the result pill text + color from a trial's score and seat status."""
+    if seated:
+        return (f"SEATED · {total}/100" if total else "SEATED"), SEAT
+    return (f"NOT SEATED · {total}/100" if total else "NOT SEATED"), MISS
 
 
 def _episode_indices(epdir: pathlib.Path, *, pre: int, target: int) -> list[int]:
@@ -133,8 +152,8 @@ def render_milestone(milestone: str, when: datetime.datetime, *, panel_w: int = 
     out: list[str] = []
     for k, epdir in enumerate(eps, start=1):
         label = epdir.name[len("ep_"):]
-        total = _read_total(label, milestone)
-        badge = f"SEATED · {total}/100" if total else "SEATED"
+        total, seated = _read_trial(label, milestone)
+        badge, badge_color = _badge_for(total, seated)
         idxs = _episode_indices(epdir, pre=90, target=44)
         frames = _montage_frames(epdir, idxs, panel_w)
         stamp = when.strftime("%Y-%m-%d_%H")
@@ -143,22 +162,31 @@ def render_milestone(milestone: str, when: datetime.datetime, *, panel_w: int = 
             frames, str(path), eyebrow=spec.eyebrow,
             title=f"{spec.title}",
             caption=spec.caption,
-            badge=badge, badge_color=SEAT,
+            badge=badge, badge_color=badge_color,
             subtitle=f"Example {k} of {len(eps)} · left · center · right cameras")
-        print(f"[render] {path.name}  ({total or '?'}/100, {len(frames)} frames)")
+        print(f"[render] {path.name}  ({total or '?'}/100 "
+              f"{'SEAT' if seated else 'MISS'}, {len(frames)} frames)")
         out.append(str(path))
     return out
 
 
+def _first_seated(milestone: str) -> pathlib.Path | None:
+    """Return the first seated episode for a milestone (for the 'both seat' duo)."""
+    for ep in _sorted_eps(milestone):
+        _, seated = _read_trial(ep.name[len("ep_"):], milestone)
+        if seated:
+            return ep
+    return None
+
+
 def render_duo(when: datetime.datetime) -> str | None:
     """Render the combined SFP (Milestone 1) + SC (Milestone 4) side-by-side demo."""
-    sfp_eps, sc_eps = _sorted_eps("m1"), _sorted_eps("m4")
-    if not sfp_eps or not sc_eps:
-        print("[duo] need at least one seated m1 and one seated m4 episode; skipping")
+    sfp, sc = _first_seated("m1"), _first_seated("m4")
+    if sfp is None or sc is None:
+        print("[duo] need one seated m1 and one seated m4 episode; skipping")
         return None
-    sfp, sc = sfp_eps[0], sc_eps[0]
-    sfp_total = _read_total(sfp.name[len("ep_"):], "m1")
-    sc_total = _read_total(sc.name[len("ep_"):], "m4")
+    sfp_total, _ = _read_trial(sfp.name[len("ep_"):], "m1")
+    sc_total, _ = _read_trial(sc.name[len("ep_"):], "m4")
     lf = _center_frames(sfp, _episode_indices(sfp, pre=88, target=48))
     rf = _center_frames(sc, _episode_indices(sc, pre=120, target=48))
     stamp = when.strftime("%Y-%m-%d_%H")

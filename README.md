@@ -7,11 +7,30 @@ Built on the [Intrinsic AI for Industry Challenge](https://www.intrinsic.ai/even
 
 The **RUN&nbsp;#4 curriculum** reopened the insertion problem: privileged-stage the plug above the port, learn the *seating* skill from vision + force, then grow the lateral offset stage by stage. That produced the project's first learned-policy seats — and a systematic study of exactly how far off-center they generalize, and why. The full interactive write-up (dose-response, code-verified mechanism, and the partial-observability analysis) is [`dashboard/showcase.html`](dashboard/showcase.html) *(open in a browser)*; the running lab notebook is [`SESSION_REPORT.md`](SESSION_REPORT.md).
 
+### ✦ Featured — two connectors, one system (SFP + SC side by side)
+
+![Combined SFP + SC demo: two connector types seated by one system](docs/media/combined_sfp_sc_together_2026-07-22_22h.gif)
+
+The same UR5e and the same curriculum framework seating **two very different connectors together**. **Left:** an **SFP fiber plug** dropping straight into an aligned NIC port (world-z insertion, `m3c`/`m4` model, **93/100**). **Right:** an **SC bayonet** following a **physically rotated** port's own insertion axis (`sc_insert` model, **87/100**). Two connector geometries, two insertion strategies, one learned system — both seat.
+
 ### Milestone 1 — First learned-policy seat
 
 ![Milestone 1: first learned-policy seat](docs/media/milestone1_first_seat_2026-07-22_08h.gif)
 
 The project's first insertion by a **learned** policy — every prior seat came from the scripted oracle. Staged above an aligned port, the policy (3 RGB cameras + wrist force, **no ground-truth pose at run time**) descends and seats the SFP plug. Engine **93/100** (tier-3); **3/3** on the matched-seed suite.
+
+<details>
+<summary><b>▸ 5 rollouts · aligned insertion</b> (click to expand)</summary>
+
+Five independent learned-policy seats from nominal poses, all **≈93/100**. Each GIF: title card → 3-camera rollout (left / center / right) → result badge.
+
+![M1 rollout 1 — seated 93/100](docs/media/milestone1_aligned_insertion_ex1_2026-07-22_22h.gif)
+![M1 rollout 2 — seated 93/100](docs/media/milestone1_aligned_insertion_ex2_2026-07-22_22h.gif)
+![M1 rollout 3 — seated 93/100](docs/media/milestone1_aligned_insertion_ex3_2026-07-22_22h.gif)
+![M1 rollout 4 — seated 93/100](docs/media/milestone1_aligned_insertion_ex4_2026-07-22_22h.gif)
+![M1 rollout 5 — seated 93/100](docs/media/milestone1_aligned_insertion_ex5_2026-07-22_22h.gif)
+
+</details>
 
 ### Milestone 2 — Off-center insertion (2&nbsp;mm)
 
@@ -19,17 +38,56 @@ The project's first insertion by a **learned** policy — every prior seat came 
 
 Growing the staged lateral offset, the policy learns to correct at the mouth and seat a **2&nbsp;mm-offset** plug (engine **92.7**). This is the edge of the learned capture radius: ~50% reliable at 2&nbsp;mm, and beyond it the plug drifts past *before it can feel the port* — a **partial-observability** limit (the offset isn't visible until contact) dissected in the write-up, along with a contact-gated fix that was built, tested, and honestly shown to arrive too late.
 
+<details>
+<summary><b>▸ 5 rollouts · off-center recovery</b> (click to expand)</summary>
+
+Five seats from lateral offsets **0.4–0.8&nbsp;mm** at varied azimuths (45°/135°/225°/90°/45°), all **≈93/100** — inside the reliable capture radius. The policy accumulates a corrective x-y bias during descent.
+
+![M2 rollout 1 — 0.4mm @45°, seated 93/100](docs/media/milestone2_offcenter_recovery_ex1_2026-07-22_22h.gif)
+![M2 rollout 2 — 0.6mm @135°, seated 93/100](docs/media/milestone2_offcenter_recovery_ex2_2026-07-22_22h.gif)
+![M2 rollout 3 — 0.8mm @225°, seated 93/100](docs/media/milestone2_offcenter_recovery_ex3_2026-07-22_22h.gif)
+![M2 rollout 4 — 0.5mm @90°, seated 93/100](docs/media/milestone2_offcenter_recovery_ex4_2026-07-22_22h.gif)
+![M2 rollout 5 — 0.5mm @45°, seated 93/100](docs/media/milestone2_offcenter_recovery_ex5_2026-07-22_22h.gif)
+
+</details>
+
 ### Milestone 3 — Robustness across 10 random locations
 
 ![Milestone 3: 10 random locations](docs/media/milestone3_ten_random_locations_2026-07-22_14h.gif)
 
 The **same seating policy on 10 fully-randomized scenes** — different board poses, NIC rails, and ports — seats **9/10 at ~93/100**, up from **7/10** before robustifying on a wider, pose-diverse corpus (`m4` vs `m3c`). The lone miss is a rare execution-failure/runaway (~10% across the distribution), disclosed in the tally rather than cropped out. Privileged-staged curriculum (a training-legal capability study; the *blind* full task is camera-resolution-limited — see the write-up).
 
+<details>
+<summary><b>▸ 5 rollouts · randomized board locations</b> (click to expand)</summary>
+
+Five seats from **different randomized port locations** (the `m4` robustified model), **≈92–93/100**. Every rollout starts the plug at a distinct board pose; the policy generalizes across them.
+
+![M3 rollout 1 — random location, seated 93/100](docs/media/milestone3_ten_random_locations_ex1_2026-07-22_22h.gif)
+![M3 rollout 2 — random location, seated 93/100](docs/media/milestone3_ten_random_locations_ex2_2026-07-22_22h.gif)
+![M3 rollout 3 — random location, seated 93/100](docs/media/milestone3_ten_random_locations_ex3_2026-07-22_22h.gif)
+![M3 rollout 4 — random location, seated 93/100](docs/media/milestone3_ten_random_locations_ex4_2026-07-22_22h.gif)
+![M3 rollout 5 — random location, seated 92/100](docs/media/milestone3_ten_random_locations_ex5_2026-07-22_22h.gif)
+
+</details>
+
 ### Milestone 4 — SC (angled) fiber insertion — a separate model for a harder task
 
 ![Milestone 4: SC angled insertion](docs/media/milestone4_sc_insertion_2026-07-22_18h.gif)
 
 A genuinely harder *second* connector task. The **SC/LC fiber port is physically rotated**, so a top-down descent rams it — the plug must be inserted along a **pose-conditioned axis**. A **separate `sc_insert` model** (distinct from the SFP policy; 3 RGB cameras + wrist force, no ground-truth pose at run time) learns this and **seats 5/6 SC poses at ~85–87**. Solving it required matching the reference oracle's slow continuous descent so the impedance controller converges onto the tilted axis (a top-down or fast descent leaves the plug ~3.5 mm off). Honest scope: the scripted oracle itself only cleanly seats ~37 % of SC poses, so this is a proof of *learned* capability on the seating subset; the SFP task keeps its own `m3c`/`m4` models.
+
+<details>
+<summary><b>▸ 5 rollouts · SC rotated-port insertion</b> (click to expand)</summary>
+
+Five learned `sc_insert` seats into the **physically rotated** SC port, **≈86–87/100** (SC scores run below SFP's ~93 — the tilted axis + slow descent is a harder task). The slow continuous descent along the port's own z-axis is visible in each rollout.
+
+![M4 rollout 1 — SC rotated port, seated 87/100](docs/media/milestone4_sc_rotated_port_ex1_2026-07-22_22h.gif)
+![M4 rollout 2 — SC rotated port, seated 87/100](docs/media/milestone4_sc_rotated_port_ex2_2026-07-22_22h.gif)
+![M4 rollout 3 — SC rotated port, seated 87/100](docs/media/milestone4_sc_rotated_port_ex3_2026-07-22_22h.gif)
+![M4 rollout 4 — SC rotated port, seated 87/100](docs/media/milestone4_sc_rotated_port_ex4_2026-07-22_22h.gif)
+![M4 rollout 5 — SC rotated port, seated 86/100](docs/media/milestone4_sc_rotated_port_ex5_2026-07-22_22h.gif)
+
+</details>
 
 <details>
 <summary><b>Earlier runs</b> — camera-only approach, pre-curriculum</summary>
